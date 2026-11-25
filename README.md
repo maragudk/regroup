@@ -1,10 +1,12 @@
-# app
+# regroup
 
-[![Docs](https://pkg.go.dev/badge/maragu.dev/app)](https://pkg.go.dev/maragu.dev/app)
-[![CI](https://github.com/maragudk/app/actions/workflows/ci.yml/badge.svg)](https://github.com/maragudk/app/actions/workflows/ci.yml)
-[![CD](https://github.com/maragudk/app/actions/workflows/cd.yml/badge.svg)](https://github.com/maragudk/app/actions/workflows/cd.yml)
+[![CI](https://github.com/maragudk/regroup/actions/workflows/ci.yml/badge.svg)](https://github.com/maragudk/regroup/actions/workflows/ci.yml)
+[![CD](https://github.com/maragudk/regroup/actions/workflows/cd.yml/badge.svg)](https://github.com/maragudk/regroup/actions/workflows/cd.yml)
+[![Security](https://github.com/maragudk/regroup/actions/workflows/security.yml/badge.svg)](https://github.com/maragudk/regroup/actions/workflows/security.yml)
 
-_app_ is a web app template using [maragu.dev/glue](https://www.maragu.dev/glue).
+Regroup. Like _Groups_, but it doesn’t Zuck.
+
+Read the [core values](docs/core-values.md) that guide the project.
 
 Made with ✨sparkles✨ by [maragu](https://www.maragu.dev/): independent software consulting for cloud-native Go apps & AI engineering.
 
