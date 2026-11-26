@@ -37,8 +37,10 @@ type timelineService interface {
 //   - POST /comments creates a comment on a post.
 //
 // Each form that makes a post or a comment carries a token of its own, and every form shown gets a new
-// one. A form sent again with the same token makes nothing, and is answered as the first time. A form
-// without a token, or with one that is not one, is answered with 400.
+// one. A form sent again with the same token makes nothing, and is answered as the first time. If it
+// was sent with other text this time, the form comes back with that text in it, and a message that it
+// was not posted, or with 409 without Datastar. A form without a token, or with one that is not one, is
+// answered with 400.
 //
 // All but the first answer Datastar with patches to the page the request came from, and none of them
 // counts as a look. Reading goes by POST too, with the post or the cursor in the body, so that what
@@ -168,13 +170,34 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 				Token:   token(),
 			})})
 		}
-		if err != nil {
+
+		// The same form sent again with other text made nothing. The person gets what the first sending
+		// made, as the first time, and keeps the text they sent now, with a message.
+		changed := errors.Is(err, model.ErrorFormResentChanged)
+		if err != nil && !changed {
 			return failed(props, err, http.StatusUnauthorized)
 		}
 
 		if !isDatastar(props.R) {
+			if changed {
+				return resent(props, "That was not posted", resentPost)
+			}
 			http.Redirect(props.W, props.R, "/", http.StatusSeeOther)
 			return nil, nil
+		}
+
+		// composer for the page to have at its top, which names the given days.
+		composer := func(days []model.Date) Node {
+			if changed {
+				return html.Composer(html.ComposerProps{
+					Body:    echo(body),
+					Message: resentPost,
+					Days:    days,
+					Fresh:   echo(props.R.PostFormValue("field")),
+					Token:   token(),
+				})
+			}
+			return Group{html.Composer(html.ComposerProps{Days: days, Fresh: post.ID.String(), Token: token()}), posted(post)}
 		}
 
 		now := now()
@@ -184,7 +207,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		// its day if that is one of them.
 		if slices.Contains(days, day.Date) {
 			return nil, writePatches(props.W,
-				patch{elements: Group{html.Composer(html.ComposerProps{Days: days, Fresh: post.ID.String(), Token: token()}), posted(post)}},
+				patch{elements: composer(days)},
 				patch{selector: "#" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts, posts)},
 			)
 		}
@@ -192,7 +215,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		// Otherwise it brings its day's heading along, to the top of the timeline. If the timeline was
 		// empty, and said so, the day takes the place of that.
 		patches := []patch{
-			{elements: Group{html.Composer(html.ComposerProps{Days: firstDays(append([]model.Date{day.Date}, days...)), Fresh: post.ID.String(), Token: token()}), posted(post)}},
+			{elements: composer(firstDays(append([]model.Date{day.Date}, days...)))},
 			{selector: "#" + html.TimelineID, mode: "prepend", elements: html.TimelineDay(day, now, posts)},
 		}
 		if len(days) == 0 {
@@ -336,13 +359,29 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 				Token:   token(),
 			})})
 		}
-		if err != nil {
+
+		// The same form sent again with other text made nothing. See the same in POST /posts.
+		changed := errors.Is(err, model.ErrorFormResentChanged)
+		if err != nil && !changed {
 			return failed(props, err, http.StatusUnauthorized)
 		}
 
 		if !isDatastar(props.R) {
+			if changed {
+				return resent(props, "That comment was not added", resentComment)
+			}
 			http.Redirect(props.W, props.R, "/", http.StatusSeeOther)
 			return nil, nil
+		}
+
+		if changed {
+			return comments(props, user, comment.PostID, html.CommentForm(html.CommentFormProps{
+				PostID:  model.PostID(echo(postID.String())),
+				Body:    echo(body),
+				Message: resentComment,
+				Fresh:   echo(props.R.PostFormValue("field")),
+				Token:   token(),
+			}))
 		}
 
 		// A comment sent again gets what it got the first time, which is on the post it was made on.
@@ -456,6 +495,20 @@ func refusal(err error, kind string, maxLength int) string {
 	default:
 		return ""
 	}
+}
+
+// resentPost and resentComment say why the text in a form that was sent again was not posted or added,
+// when the same form was sent before with other text.
+const (
+	resentPost    = "Your earlier try did go through, and is on the timeline as it was sent. This text has not been posted."
+	resentComment = "Your earlier try did go through, and is with the comments as it was sent. This text has not been added."
+)
+
+// resent is the answer to a browser that does not run the page's script, when it sent the same form again
+// with other text.
+func resent(props html.PageProps, heading, message string) (Node, error) {
+	page := html.MessagePage(html.MessagePageProps{PageProps: props, Heading: heading, Message: message})
+	return page, httph.HTTPError{Code: http.StatusConflict}
 }
 
 // refused is the answer to a browser that does not run the page's script, when what it sent was refused.

@@ -42,18 +42,19 @@ func CreatePost(f *Fat, db postCreator, now func() time.Time) {
 		if err == nil {
 			trace.SpanFromContext(ctx).SetAttributes(attribute.String("post.id", p.ID.String()))
 			f.log.InfoContext(ctx, "Post sent again from the same form", "postID", p.ID, "authorID", actor)
-			return p, nil
+			return p, resentChanged(p.Body, body, model.CleanPostBody)
 		}
 		if !errors.Is(err, model.ErrorPostNotFound) {
 			return model.Post{}, err
 		}
 
-		body, err = model.CleanPostBody(body)
+		cleaned, err := model.CleanPostBody(body)
 		if err != nil {
 			return model.Post{}, err
 		}
 
-		p, err = db.CreatePost(ctx, model.Post{Created: model.Time{T: now()}, AuthorID: actor, Body: body}, formToken)
+		// The store returns the post made with the token, if another sending made it in the meantime.
+		p, err = db.CreatePost(ctx, model.Post{Created: model.Time{T: now()}, AuthorID: actor, Body: cleaned}, formToken)
 		if err != nil {
 			return model.Post{}, err
 		}
@@ -61,7 +62,7 @@ func CreatePost(f *Fat, db postCreator, now func() time.Time) {
 		trace.SpanFromContext(ctx).SetAttributes(attribute.String("post.id", p.ID.String()))
 		f.log.InfoContext(ctx, "Created post", "postID", p.ID, "authorID", actor)
 
-		return p, nil
+		return p, resentChanged(p.Body, body, model.CleanPostBody)
 	}
 }
 
@@ -69,8 +70,9 @@ func CreatePost(f *Fat, db postCreator, now func() time.Time) {
 // given body, cleaned by [model.CleanPostBody]. It is posted now, by the clock the operation was wired with.
 //
 // The token is what [model.NewFormToken] made, or [model.ErrorFormTokenInvalid]. If the user has sent a
-// post with the same token before, CreatePost returns the post made then, whatever the body is now, and
-// makes nothing.
+// post with the same token before, CreatePost makes nothing and returns the post made then. If the body
+// now, once cleaned, is not that post's body, or cleaning refuses it, it returns the post together with
+// [model.ErrorFormResentChanged], since this text was not posted.
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
 func (f *Fat) CreatePost(ctx context.Context, actor model.UserID, token, body string) (model.Post, error) {
@@ -117,7 +119,7 @@ func CreateComment(f *Fat, db commentCreator, now func() time.Time) {
 		if err == nil {
 			trace.SpanFromContext(ctx).SetAttributes(attribute.String("post.id", c.PostID.String()), attribute.String("comment.id", c.ID.String()))
 			f.log.InfoContext(ctx, "Comment sent again from the same form", "commentID", c.ID, "postID", c.PostID, "authorID", actor)
-			return c, nil
+			return c, resentChanged(c.Body, body, model.CleanCommentBody)
 		}
 		if !errors.Is(err, model.ErrorCommentNotFound) {
 			return model.Comment{}, err
@@ -128,12 +130,13 @@ func CreateComment(f *Fat, db commentCreator, now func() time.Time) {
 			return model.Comment{}, err
 		}
 
-		body, err = model.CleanCommentBody(body)
+		cleaned, err := model.CleanCommentBody(body)
 		if err != nil {
 			return model.Comment{}, err
 		}
 
-		c, err = db.CreateComment(ctx, model.Comment{Created: model.Time{T: now()}, PostID: postID, AuthorID: actor, Body: body}, formToken)
+		// The store returns the comment made with the token, if another sending made it in the meantime.
+		c, err = db.CreateComment(ctx, model.Comment{Created: model.Time{T: now()}, PostID: postID, AuthorID: actor, Body: cleaned}, formToken)
 		if err != nil {
 			return model.Comment{}, err
 		}
@@ -141,7 +144,7 @@ func CreateComment(f *Fat, db commentCreator, now func() time.Time) {
 		trace.SpanFromContext(ctx).SetAttributes(attribute.String("post.id", c.PostID.String()), attribute.String("comment.id", c.ID.String()))
 		f.log.InfoContext(ctx, "Created comment", "commentID", c.ID, "postID", c.PostID, "authorID", actor)
 
-		return c, nil
+		return c, resentChanged(c.Body, body, model.CleanCommentBody)
 	}
 }
 
@@ -151,8 +154,10 @@ func CreateComment(f *Fat, db commentCreator, now func() time.Time) {
 // anything about the body.
 //
 // The token is what [model.NewFormToken] made, or [model.ErrorFormTokenInvalid]. If the user has sent a
-// comment with the same token before, CreateComment returns the comment made then, on the post it was
-// made on, whatever the post and the body are now, and makes nothing.
+// comment with the same token before, CreateComment makes nothing and returns the comment made then, on
+// the post it was made on, whatever the post is now. If the body now, once cleaned, is not that comment's
+// body, or cleaning refuses it, it returns the comment together with [model.ErrorFormResentChanged],
+// since this text was not added.
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
 func (f *Fat) CreateComment(ctx context.Context, actor model.UserID, postID model.PostID, token, body string) (model.Comment, error) {
@@ -282,6 +287,15 @@ func (f *Fat) GetComments(ctx context.Context, actor model.UserID, postID model.
 	comments, err := f.getComments(ctx, actor, postID)
 	recordError(span, err)
 	return comments, err
+}
+
+// resentChanged is [model.ErrorFormResentChanged] if the body sent, cleaned by the given function, is not
+// the body that was stored from the same form, and nil if it is.
+func resentChanged(stored, sent string, clean func(string) (string, error)) error {
+	if cleaned, err := clean(sent); err != nil || cleaned != stored {
+		return model.ErrorFormResentChanged
+	}
+	return nil
 }
 
 // checkActive that the acting user exists and is active, or return [model.ErrorUserNotFound] or

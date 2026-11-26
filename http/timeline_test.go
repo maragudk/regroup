@@ -645,14 +645,14 @@ func TestTimeline_post(t *testing.T) {
 }
 
 func TestTimeline_again(t *testing.T) {
-	t.Run("posts once when the same form is sent again, answers again as the first time, and gives a new token each time", func(t *testing.T) {
+	t.Run("posts once when the same form is sent again with the same text, answers again as the first time, and gives a new token each time", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 		cookie := a.signIn(t, signe)
 		sent := newToken(t)
 
 		var posts, tokens []string
-		for _, body := range []string{"Cake.", "Cake!", ""} {
+		for _, body := range []string{"Cake.", "Cake.", " Cake.\r\n"} {
 			res := a.post(t, cookie, "/posts", url.Values{"body": {body}, "days": {"2031-03-14"}, "token": {sent}}, true)
 			is.Equal(t, http.StatusOK, res.Code)
 			patches := a.patches(t, res)
@@ -661,6 +661,9 @@ func TestTimeline_again(t *testing.T) {
 			is.Equal(t, "Cake.", text(one(t, article, hasAttr("data-body"))))
 			posts = append(posts, attr(article, "data-post"))
 			tokens = append(tokens, attr(one(t, patches[0], named("token")), "value"))
+			is.Equal(t, "", text(one(t, patches[0], tag("textarea"))))
+			is.Equal(t, 0, len(all(patches[0], role("alert"))))
+			is.Equal(t, "Your post is on the timeline.", announced(t, patches))
 		}
 		is.Equal(t, 1, a.count(t, "posts"))
 		is.Equal(t, posts[0], posts[1])
@@ -677,7 +680,7 @@ func TestTimeline_again(t *testing.T) {
 		is.Equal(t, 1, a.count(t, "posts"))
 	})
 
-	t.Run("comments once when the same form is sent again, answers again as the first time, and gives a new token each time", func(t *testing.T) {
+	t.Run("comments once when the same form is sent again with the same text, answers again as the first time, and gives a new token each time", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
@@ -685,12 +688,17 @@ func TestTimeline_again(t *testing.T) {
 		sent := newToken(t)
 
 		var tokens []string
-		for _, body := range []string{"Yes.", "Yes!", ""} {
+		for _, body := range []string{"Yes.", "Yes.", "\tYes.\n"} {
 			res := a.post(t, cookie, "/comments", url.Values{"post": {post.ID.String()}, "body": {body}, "token": {sent}}, true)
 			is.Equal(t, http.StatusOK, res.Code)
-			patch := a.patches(t, res)[0]
+			patches := a.patches(t, res)
+			patch := patches[0]
 			is.EqualSlice(t, []string{"Yes."}, texts(all(one(t, patch, id("post-"+post.ID.String()+"-comments")), hasAttr("data-body"))))
-			tokens = append(tokens, attr(one(t, one(t, patch, id("post-"+post.ID.String()+"-comment-form")), named("token")), "value"))
+			form := one(t, patch, id("post-"+post.ID.String()+"-comment-form"))
+			tokens = append(tokens, attr(one(t, form, named("token")), "value"))
+			is.Equal(t, "", text(one(t, form, tag("textarea"))))
+			is.Equal(t, 0, len(all(form, role("alert"))))
+			is.Equal(t, "Your comment was added.", announced(t, patches))
 		}
 		is.Equal(t, 1, a.count(t, "comments"))
 		for i, token := range tokens {
@@ -702,6 +710,102 @@ func TestTimeline_again(t *testing.T) {
 
 		res := a.post(t, cookie, "/comments", url.Values{"post": {post.ID.String()}, "body": {"Yes."}, "token": {sent}}, false)
 		is.Equal(t, http.StatusSeeOther, res.Code)
+		is.Equal(t, 1, a.count(t, "comments"))
+	})
+
+	t.Run("keeps other text sent again with the same form in the composer, with a message that the first went through and this did not, and answers with the first post", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		cookie := a.signIn(t, signe)
+		sent := newToken(t)
+
+		first := a.patches(t, a.post(t, cookie, "/posts", url.Values{"body": {"Cake."}, "days": {"2031-03-14"}, "token": {sent}}, true))
+		post := attr(one(t, first[1], tag("article")), "data-post")
+
+		tokens := []string{sent}
+		for _, body := range []string{"Cake!", "", strings.Repeat("a", model.PostBodyMaxLength+1)} {
+			res := a.post(t, cookie, "/posts", url.Values{"body": {body}, "days": {"2031-03-14"}, "field": {""}, "token": {sent}}, true)
+			is.Equal(t, http.StatusOK, res.Code)
+			decoded, patches := a.decode(t, res), a.patches(t, res)
+			is.Equal(t, 2, len(patches))
+
+			composer := one(t, patches[0], id("composer"))
+			field := one(t, composer, tag("textarea"))
+			is.Equal(t, body, text(field))
+			is.Equal(t, "composer-body", attr(field, "id"))
+			is.Equal(t, "true", attr(field, "aria-invalid"))
+			is.Equal(t, "Your earlier try did go through, and is on the timeline as it was sent. This text has not been posted.", text(one(t, composer, role("alert"))))
+			is.Equal(t, "2031-03-14", attr(one(t, composer, named("days")), "value"))
+			token := attr(one(t, composer, named("token")), "value")
+			_, err := model.ParseFormToken(token)
+			is.NotError(t, err)
+			is.True(t, !slices.Contains(tokens, token), "the composer got a token it had before")
+			tokens = append(tokens, token)
+
+			// What the first sending made is shown as the first time, without saying it was posted now.
+			is.Equal(t, "#day-2031-03-14-posts", decoded[1].Selector)
+			article := one(t, patches[1], tag("article"))
+			is.Equal(t, post, attr(article, "data-post"))
+			is.Equal(t, "Cake.", text(one(t, article, hasAttr("data-body"))))
+			is.Equal(t, 0, len(all(patches[0], id("announcement"))))
+		}
+		is.Equal(t, 1, a.count(t, "posts"))
+
+		// The new token the form got makes the text a post of its own.
+		res := a.post(t, cookie, "/posts", url.Values{"body": {"Cake!"}, "token": {tokens[1]}}, true)
+		is.Equal(t, "Cake!", text(one(t, a.patches(t, res)[1], hasAttr("data-body"))))
+		is.Equal(t, 2, a.count(t, "posts"))
+	})
+
+	t.Run("keeps other text sent again with the same comment form in it, with a message that the first went through and this did not, and answers with the comments", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
+		cookie := a.signIn(t, signe)
+		sent := newToken(t)
+
+		a.post(t, cookie, "/comments", url.Values{"post": {post.ID.String()}, "body": {"Yes."}, "token": {sent}}, true)
+
+		for _, body := range []string{"Yes!", "", strings.Repeat("a", model.CommentBodyMaxLength+1)} {
+			res := a.post(t, cookie, "/comments", url.Values{"post": {post.ID.String()}, "body": {body}, "field": {"c_before"}, "token": {sent}}, true)
+			is.Equal(t, http.StatusOK, res.Code)
+			patches := a.patches(t, res)
+			is.Equal(t, 1, len(patches))
+
+			is.EqualSlice(t, []string{"Yes."}, texts(all(one(t, patches[0], id("post-"+post.ID.String()+"-comments")), hasAttr("data-body"))))
+			form := one(t, patches[0], id("post-"+post.ID.String()+"-comment-form"))
+			field := one(t, form, tag("textarea"))
+			is.Equal(t, body, text(field))
+			is.Equal(t, "post-"+post.ID.String()+"-comment-body-c_before", attr(field, "id"))
+			is.Equal(t, "true", attr(field, "aria-invalid"))
+			is.Equal(t, "Your earlier try did go through, and is with the comments as it was sent. This text has not been added.", text(one(t, form, role("alert"))))
+			token := attr(one(t, form, named("token")), "value")
+			_, err := model.ParseFormToken(token)
+			is.NotError(t, err)
+			is.True(t, token != sent)
+			is.Equal(t, 0, len(all(patches[0], id("announcement"))))
+		}
+		is.Equal(t, 1, a.count(t, "comments"))
+	})
+
+	t.Run("tells a browser that does not run the page's script that other text sent again with the same form was not posted, and makes nothing", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
+		cookie := a.signIn(t, signe)
+
+		for path, forms := range map[string][2]url.Values{
+			"/posts":    {{"body": {"Cake."}, "token": {newToken(t)}}, {"body": {"Cake!"}}},
+			"/comments": {{"body": {"Yes."}, "token": {newToken(t)}, "post": {post.ID.String()}}, {"body": {"Yes!"}, "post": {post.ID.String()}}},
+		} {
+			is.Equal(t, http.StatusSeeOther, a.post(t, cookie, path, forms[0], false).Code, path)
+			forms[1].Set("token", forms[0].Get("token"))
+			res := a.post(t, cookie, path, forms[1], false)
+			is.Equal(t, http.StatusConflict, res.Code, path)
+			doc := parse(t, res.Body.String())
+			is.True(t, strings.Contains(text(doc), "Your earlier try did go through"), text(doc))
+		}
+		is.Equal(t, 2, a.count(t, "posts"))
 		is.Equal(t, 1, a.count(t, "comments"))
 	})
 

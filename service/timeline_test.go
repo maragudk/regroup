@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"fmt"
 	"log/slog"
@@ -88,7 +89,7 @@ func TestFat_CreatePost(t *testing.T) {
 }
 
 func TestFat_CreatePost_again(t *testing.T) {
-	t.Run("returns the post made the first time when the same token is sent again, whatever the body, and makes nothing", func(t *testing.T) {
+	t.Run("returns the post made the first time when the same token is sent again with the same text once cleaned, and makes nothing", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")
 		c := &clock{t: base}
@@ -100,7 +101,7 @@ func TestFat_CreatePost_again(t *testing.T) {
 		is.NotError(t, err)
 
 		c.t = base.Add(time.Minute)
-		for _, body := range []string{"Cake.", "Cake!", " ", strings.Repeat("a", model.PostBodyMaxLength+1)} {
+		for _, body := range []string{"Cake.", "  Cake.\r\n"} {
 			again, err := fat.CreatePost(t.Context(), signe.ID, sent, body)
 			is.NotError(t, err)
 			is.Equal(t, first, again)
@@ -109,6 +110,48 @@ func TestFat_CreatePost_again(t *testing.T) {
 		posts, _, err := db.GetTimeline(t.Context(), signe.ID, nil, 10)
 		is.NotError(t, err)
 		is.Equal(t, 1, len(posts))
+	})
+
+	t.Run("returns the post made the first time and says the text was not posted when the same token is sent again with other text, and makes nothing", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		c := &clock{t: base}
+		fat := servicetest.NewFat(t)
+		service.CreatePost(fat, db, c.Now)
+		sent := token(t)
+
+		first, err := fat.CreatePost(t.Context(), signe.ID, sent, "Cake.")
+		is.NotError(t, err)
+
+		c.t = base.Add(time.Minute)
+		for _, body := range []string{"Cake!", "cake.", " ", "", strings.Repeat("a", model.PostBodyMaxLength+1), "Cake.\xff"} {
+			again, err := fat.CreatePost(t.Context(), signe.ID, sent, body)
+			is.Error(t, model.ErrorFormResentChanged, err)
+			is.Equal(t, first, again)
+		}
+
+		posts, _, err := db.GetTimeline(t.Context(), signe.ID, nil, 10)
+		is.NotError(t, err)
+		is.Equal(t, 1, len(posts))
+	})
+
+	t.Run("says the text was not posted when another sending with the same token made the post in the meantime, with other text", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		fat := servicetest.NewFat(t)
+		service.CreatePost(fat, &unseenTokens{Database: db}, (&clock{t: base}).Now)
+		sent := token(t)
+
+		first, err := fat.CreatePost(t.Context(), signe.ID, sent, "Cake.")
+		is.NotError(t, err)
+
+		again, err := fat.CreatePost(t.Context(), signe.ID, sent, "Cake.")
+		is.NotError(t, err)
+		is.Equal(t, first, again)
+
+		again, err = fat.CreatePost(t.Context(), signe.ID, sent, "Cake!")
+		is.Error(t, model.ErrorFormResentChanged, err)
+		is.Equal(t, first, again)
 	})
 
 	t.Run("makes a post for each new token", func(t *testing.T) {
@@ -218,7 +261,7 @@ func TestFat_CreateComment(t *testing.T) {
 		}
 	})
 
-	t.Run("returns the comment made the first time when the same token is sent again, whatever the post and the body, and makes nothing", func(t *testing.T) {
+	t.Run("returns the comment made the first time when the same token is sent again, whatever the post, and says the text was not added if it is other text, and makes nothing", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")
 		c := &clock{t: base}
@@ -233,17 +276,51 @@ func TestFat_CreateComment(t *testing.T) {
 
 		c.t = base.Add(time.Minute)
 		for _, again := range []struct {
-			post model.PostID
-			body string
-		}{{p.ID, "Gone now."}, {p.ID, ""}, {"p_nope", "Gone now."}} {
+			post    model.PostID
+			body    string
+			changed bool
+		}{
+			{p.ID, "Gone now.", false},
+			{p.ID, " Gone now.\n", false},
+			{"p_nope", "Gone now.", false},
+			{p.ID, "Gone now!", true},
+			{p.ID, "", true},
+			{"p_nope", strings.Repeat("a", model.CommentBodyMaxLength+1), true},
+		} {
 			comment, err := fat.CreateComment(t.Context(), signe.ID, again.post, sent, again.body)
-			is.NotError(t, err)
+			if again.changed {
+				is.Error(t, model.ErrorFormResentChanged, err)
+			} else {
+				is.NotError(t, err)
+			}
 			is.Equal(t, first, comment)
 		}
 
 		comments, err := db.GetComments(t.Context(), signe.ID, p.ID)
 		is.NotError(t, err)
 		is.Equal(t, 1, len(comments))
+	})
+
+	t.Run("says the text was not added when another sending with the same token made the comment in the meantime, with other text", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		c := &clock{t: base}
+		fat := servicetest.NewFat(t)
+		service.CreatePost(fat, db, c.Now)
+		service.CreateComment(fat, &unseenTokens{Database: db}, c.Now)
+		p := createPost(t, fat, signe, "Cake")
+		sent := token(t)
+
+		first, err := fat.CreateComment(t.Context(), signe.ID, p.ID, sent, "Yes.")
+		is.NotError(t, err)
+
+		again, err := fat.CreateComment(t.Context(), signe.ID, p.ID, sent, "Yes.")
+		is.NotError(t, err)
+		is.Equal(t, first, again)
+
+		again, err = fat.CreateComment(t.Context(), signe.ID, p.ID, sent, "Yes!")
+		is.Error(t, model.ErrorFormResentChanged, err)
+		is.Equal(t, first, again)
 	})
 
 	t.Run("refuses a token that is not one", func(t *testing.T) {
@@ -504,6 +581,20 @@ func TestFat_timelineWiring(t *testing.T) {
 			op.wire(fat, db)
 		})
 	}
+}
+
+// unseenTokens is the real database, except that a look-up by form token finds nothing, as when another
+// sending with the same token is stored between the look-up and the insert.
+type unseenTokens struct {
+	*sqlite.Database
+}
+
+func (u *unseenTokens) GetPostByFormToken(context.Context, model.UserID, model.FormToken) (model.Post, error) {
+	return model.Post{}, model.ErrorPostNotFound
+}
+
+func (u *unseenTokens) GetCommentByFormToken(context.Context, model.UserID, model.FormToken) (model.Comment, error) {
+	return model.Comment{}, model.ErrorCommentNotFound
 }
 
 // newTimelineFat with the timeline's operations wired to the given database and clock.
