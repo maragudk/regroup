@@ -654,3 +654,49 @@ Validate with `make lint`, `make test`, `make bombadil`, and `go test -race -shu
 
 - Bombadil runs Chrome, which has `field-sizing`, so `app.js` only runs in my emulation; a run in an older Safari or Firefox would exercise it.
 - A per-post guard for the sections "Earlier posts" brings is not needed today, since a post on the page always has its day's section; it would be if that changed.
+
+## Step 8: A nightly workflow for the longer generated tests and fuzzing
+
+**Author:** main, from the report of a parallel builder that worked in its own worktree (branch `worktree-agent-ac5f859d2bc3acf79`, commit `f704c1a`, merged into `worktree-product-md`)
+
+### Prompt Context
+
+**Verbatim prompt:** "yes"
+**Interpretation:** Markus's agreement on 2026-11-26 to the testing plan, which has stateful property tests and fuzzing run longer nightly and a nightly run that opens an issue when it fails.
+**Inferred intent:** The short runs on every push keep the test job quick; the long runs are where rare sequences and inputs get found, and nobody should have to remember to look at them.
+
+### What I did
+
+The builder added `/.github/workflows/nightly.yml`, named "Nightly", which runs at 04:23 UTC on `main` and can be started by hand with `history-cases`, `history-steps`, and `fuzz-time`. Its jobs: `targets` lists the fuzz targets with `/.github/scripts/fuzz-targets.sh`, so a new one is picked up without editing the workflow (five today); `history` runs `TestFat_history` and `TestTimeline_history` with `HISTORY_CASES=2000 HISTORY_STEPS=100`; `fuzz` runs one matrix job per target for 4 minutes through `/.github/scripts/fuzz.sh`, which prints a failing input and keeps it as an artefact; `race` runs the whole suite with `-race`, a printed shuffle seed, and `-count=3`; and `report`, the only job that may write issues, runs `/.github/scripts/report-nightly.sh` on the logs and opens or comments on an issue labelled `nightly`. I merged the branch and corrected the line in `/docs/todo/verification.md` that said the nightly runs were not built.
+
+### Why
+
+Thirty short histories per push is enough to catch a broken rule quickly, and too few to find rare sequences. The nightly run does two thousand long ones, and fuzzes every parser of what a person sends.
+
+### What worked
+
+Driving every part from small scripts, so that each could be run locally: the fuzz script against a planted failing target, and the issue script against a fake `gh` for a new issue, a comment on an open one, each part failing alone, missing logs, several failing targets, and an oversized body.
+
+### What didn't work
+
+- Bash did not parse a `:?` message with an apostrophe in it; the symptom was "log: unbound variable" far from the cause. The apostrophe was removed.
+- `go run` of actionlint was refused by the permission system, so the workflow has not been linted.
+
+### What I learned
+
+`go test -shuffle on` prints its seed only with `-v`, so the job picks the seed itself, prints it first, and passes it in. Measured on a loaded machine: the history run 880 seconds (service 361, http 781), the race suite 70 seconds with a warm cache.
+
+### What was tricky
+
+Telling which fuzz target failed, because artefacts merge flat; `failure()` in a job with `needs`; and keeping the report job's trust small: it checks out one script and reads only logs.
+
+### What warrants review
+
+- The workflow has never run on GitHub: the matrix from `fromJSON`, the merging of artefacts, the sparse checkout, the permissions, and the real `gh` calls are all untried, as is the speed of a runner. The job timeouts (50 minutes for history) are guesses until the first run.
+- The history run is not under `-race`.
+- The fuzz corpus is not kept between nights, so each run starts from the seeds.
+- The issue script duplicates a few lines of bombadil's.
+
+### Future work
+
+Start the workflow by hand once it is on `main`, and fix what the first run shows.
