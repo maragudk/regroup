@@ -1,0 +1,1294 @@
+ ▐▛███▛█   Claude Code v2.1.332
+▝▜██████▀  Fable 5.2 · Claude Ultra
+ ▝▝   ▝▝   ~/Developer/regroup/.claude/worktrees/product-md
+
+⚠ Code Mode (experimental) is on · this session can be resumed only with Code Mode on
+⚠ Remote Control isn't available in Code Mode (experimental) yet, so this session isn't connected. To use Remote Control, quit Claude Code and start it again with CLAUDE_CODE_EXPERIMENTAL_CODE_MODE set to 0.
+  ⎿  SessionStart:startup says: Welcome to fabrik.
+
+❯ /model                                                                        
+  ⎿  Set model to Fable 5.2 and saved as your default for new sessions
+
+❯ /impeccable:impeccable init                                                   
+
+  Read 6 files, listed 2 directories, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Answered Claude's questions:
+  ⎿  · Who is regroup primarily designed for? → Any private community
+     · What do members do in a group? Pick everything that is confirmed product,
+     not just nice to have. → Discussions, Events, Undecided beyond 
+     discussions, "Photos, but not generic file sharing"
+     · "Like Groups, but it doesn't Zuck" is dry and a bit cheeky. Where does 
+     that voice apply? → Undecided
+
+⏺ Writing PRODUCT.md from your answers now, in a worktree.
+
+⏺ Skill(fabrik:git)
+  ⎿  Loaded skill
+
+⏺ Creating worktree(product-md)
+  ⎿  Switched to worktree on branch worktree-product-md
+     /Users/maragubot/Developer/regroup/.claude/worktrees/product-md
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(PRODUCT.md)
+  ⎿  Wrote 93 lines to PRODUCT.md
+      1 # Product
+      2 
+      3 <!-- impeccable:product-schema 1 -->
+      4 
+      5 ## Platform
+      6 
+      7 web
+      8 
+      9 ## Users
+     … +84 lines (ctrl+o to expand)
+
+  Created PR #5, ran 2 shell commands (ctrl+o to expand)
+
+⏺ PRODUCT.md is written and up as PR #5, not merged: parts of it are my reading
+  rather than your words, so check these first.
+
+  - Capabilities: you ticked Discussions, Events, and "Undecided beyond
+    discussions", and wrote "Photos, but not generic file sharing". I recorded
+    discussions, events, and photos as confirmed, generic file sharing as out,
+    and everything else as open. Say so if events or photos should be open
+    instead.
+  - Users: any private community, both people who know each other and
+    online-only groups. The shared office stays the test case for what to build
+    first.
+  - Product principles: I derived these five from the core values, and you have
+    not seen the wording.
+    a. The group comes first, gracefully.
+    b. Kindness is the easy path.
+    c. Nothing disappears silently.
+    d. Never compete for attention.
+    e. The software serves the group, not the host.
+  - Open decisions: the in-app voice, an accessibility standard, what success
+    means beyond the office group, who typically hosts, and how a group protects
+    itself without a moderator.
+
+  Decided by me, for you to overrule:
+
+  - Spec wins: the file says docs/spec.md wins where the two disagree.
+  - Template look: it notes that the Monaspace fonts and the indigo colour are
+    starter-template leftovers, not brand choices.
+  - Build-path question skipped: it only covers landing pages, and the marketing
+    site lives outside this repository.
+  - Live mode skipped: there is only a placeholder page to iterate on.
+
+  One blemish: the commit subject reads "Add  with the product record for design
+  work". The shell ate the backticked filename, which ran as a command and
+  failed with "command not found", so nothing else happened. Fixing it needs a
+  force-push to my own branch, which the harness refused. The PR title is
+  correct, so I would leave it unless you want the force-push.
+
+  Reply "merge #5" or give me corrections. After that, the next step is to name
+  the first surface to build, or run /impeccable shape <surface> for a brief
+  without implementation.
+
+❯ Let's keep the PR open and continue work: first surface                       
+
+  Read 5 files, listed 1 directory · 1 failed (ctrl+o to expand)
+
+⏺ Answered Claude's questions:
+  ⎿  · Which surface do we build first? Nothing exists yet beyond a placeholder 
+     page, so the first one also sets the look for everything after it. → The 
+     group page (Recommended)
+     · How is a group's conversation organised? → One stream of posts 
+     (Recommended)
+     · What would your shared office actually post about? I want to design with 
+     real material, not lorem ipsum. → Social plans, Asks and offers, Practical 
+     notices, "Occasions (birthdays etc.), cake in the kitchen, greetings from a
+     holiday, work milestones "
+
+⏺ Group page it is, as one stream of posts. Reading the design playbook for the
+  next step: choosing a visual world.
+
+  Read 2 files (ctrl+o to expand)
+
+❯ Maybe not just posts? Since events are coming, maybe it's more of a timeline  
+
+⏺ Agreed, and it fits the content you listed: lunch plans, birthdays, cake,
+  holiday greetings, and milestones are all anchored in time. A timeline raises
+  three decisions that change the page.
+
+⏺ Answered Claude's questions:
+  ⎿  · Does the timeline run into the future? An event has two moments: when it 
+     is announced and when it happens. → No, only what was posted
+     · A comment arrives on last week's post. What happens on the timeline? → It
+     stays put and is marked (Recommended)
+     · How much of the timeline goes into the first build? → Design for all, 
+     build posts first (Recommended)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Timeline will show only posted items, with upcoming events on a separate list
+  and the first build limited to posts and comments. I'm preparing design
+  directions for you to pick from on a decision page next. · summary
+
+  Ran 4 shell commands · 1 failed (ctrl+o to expand)
+
+⏺ Write(.impeccable/decision-payload.json)
+  ⎿  Wrote 241 lines to .impeccable/decision-payload.json
+       1 {
+       2   "title": "Choose the visual world for regroup",
+       3   "question": "The roll assigned The Members' Bulletin. Keep it,
+          take an alternate, or re-roll. Each sketch shows the same group
+          page: the timeline, with upcoming events beside it.",
+       4   "options": [
+       5     {
+       6       "id": "bulletin",
+       7       "kind": "assigned",
+       8       "label": "The Members' Bulletin",
+     … +233 lines (ctrl+o to expand)
+
+  Ran 2 shell commands (ctrl+o to expand)
+⏺ The decision page is served on the Mac mini's localhost only, so I'm adding a
+  relay so you can open it from the MacBook, and starting four sketch agents.
+
+⏺ Write(.impeccable/sketch-brief.md)
+  ⎿  Wrote 52 lines to .impeccable/sketch-brief.md
+      1 # Sketch brief: the regroup group page
+      2 
+      3 You write ONE self-contained HTML file: a sketch of the first vie
+        wport of regroup's group page, in one assigned visual world. Four
+         agents sketch the same screen in four different worlds, and the
+        product owner chooses between them. So the page's organisation an
+        d content below are fixed and identical across sketches. Your wor
+        ld contributes exactly four things: type, palette, density, and o
+        ne signature move. It never supplies the layout, the navigation,
+        or the controls.
+     … +49 lines (ctrl+o to expand)
+
+⏺ Agent(Sketch bulletin group page) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent(Sketch logbook group page) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent(Sketch challenger-yellow group page) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent(Sketch canon group page) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+  Read 1 file · 1 failed (ctrl+o to expand)
+
+⏺ Four sketch agents are working on the group page, and the decision page is
+  only reachable on localhost on the Mac mini. To see it from your MacBook, run
+  the SSH tunnel command I've listed, or tell me to publish the sketches as a
+  private Artifact instead. · summary
+
+⏺ Agent "Sketch canon group page" finished · 59s
+
+⏺ Agent "Sketch challenger-yellow group page" finished · 1m 6s
+
+⏺ Agent "Sketch bulletin group page" finished · 1m 36s
+
+⏺ Three of four sketches are done (Bulletin, Terminal Yellow, and the category
+  standard); waiting on the Logbook.
+
+⏺ Agent "Sketch logbook group page" finished · 1m 38s
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+  ⎿  Resuming agent a75fe4a
+
+⏺ Agent "Sketch logbook group page" finished · 2m 7s
+
+  Read 4 files, ran 8 shell commands (ctrl+o to expand)
+
+⏺ All four sketches are ready and the decision page is waiting for your choice.
+
+  I looked at each render. They show the same page and content, and only type,
+  palette, density, and one signature move differ:
+
+  - The Members' Bulletin: mint ground, blue masthead and day slugs, times in a
+    left margin column, numbered posts, and a pink overprinted "2 new" mark.
+  - The Cabin Logbook: green shell, serif entries signed at the foot, and a red
+    ribbon reading "You read up to here yesterday".
+  - Terminal Yellow: black shell, yellow day bands, pictogram squares, and large
+    dates in "Coming up".
+  - The category standard: white cards on grey, avatars, and a blue accent.
+
+  Two things to know when judging:
+
+  - Cut-off: the first screen ends around Amira's post, so the event post and
+    the photo post are in the files but not visible. The retracted comment shows
+    only in the Bulletin.
+  - Made-up content: the group name "The Loft" and the people are invented.
+
+  To choose, either open the tunnel or ask for the fallback:
+
+  - Tunnel: run ssh -N -L 57593:127.0.0.1:57593 mini3.king-dojo.ts.net on the
+    MacBook, then open http://127.0.0.1:57593/. You can pick, steer, or re-roll
+    there.
+  - Fallback: say "fallback" and I publish the four as a private Artifact and
+    take your answer here.
+
+  Ran 1 shell command · 1 failed (ctrl+o to expand)
+
+❯ I'm getting a 403. Can't you just listen on all interfaces instead of         
+  localhost?                                                                    
+
+  Made 1 scratchpad edit +28, searched for 1 pattern, ran 7 shell commands (ctrl+o to expand)
+
+⏺ The decision page is live at the tailnet address on port 57594, but it rejects
+  the Host header your tunnel sends, so I added a relay that rewrites it;
+  please pick a card on that page, or tell me your choice here if submitting
+  fails, and I'll stop the relay once you've chosen. · summary
+
+❯ Give me the URL                                                               
+
+⏺ http://mini3.king-dojo.ts.net:57594/
+❯ I don't like these. I had an old design that had a TailwindCSS default        
+  palette orange, and some nice, friendly typography, and leaned on that with   
+  minimal UI. But I'm also considering something neo-grotesque. Could you       
+  re-roll with that in mind?                                                    
+
+⏺ Re-rolling with your steer: Tailwind orange, friendly type, and minimal UI on
+  one side, and neo-grotesque on the other. The same page will update with a new
+  hand.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(.impeccable/sketch-brief-2.md)
+  ⎿  Wrote 56 lines to .impeccable/sketch-brief-2.md
+      1 # Sketch brief: the regroup group page
+      2 
+      3 You write ONE self-contained HTML file: a sketch of the first vie
+        wport of regroup's group page, in one assigned visual world. Four
+         agents sketch the same screen in four different worlds, and the
+        product owner chooses between them. So the page's organisation an
+        d content below are fixed and identical across sketches. Your wor
+        ld contributes exactly four things: type, palette, density, and o
+        ne signature move. It never supplies the layout, the navigation,
+        or the controls.
+     … +53 lines (ctrl+o to expand)
+
+⏺ Write(.impeccable/decision-payload-2.json)
+  ⎿  Wrote 243 lines to .impeccable/decision-payload-2.json
+       1 {
+       2   "title": "Choose the visual world for regroup",
+       3   "question": "A new hand, steered by you: Tailwind orange, mini
+         mal UI, and either friendly type or a neo-grotesque. The roll as
+         signed The Corner Shop. Keep it, take an alternate, or re-roll."
+         ,
+       4   "options": [
+       5     {
+       6       "id": "shop",
+       7       "kind": "assigned",
+     … +236 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Agent(Sketch shop group page) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent(Sketch plain group page) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent(Sketch key group page) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent(Sketch challenger-board group page) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Four agents are now drawing the sketches in four styles, and I'm adding a
+  compact composer, an event post and a comment thread to the first screen. 
+  · summary
+
+⏺ Agent "Sketch plain group page" finished · 1m 23s
+
+⏺ Agent "Sketch challenger-board group page" finished · 1m 57s
+
+⏺ Two of the four new sketches have landed (Plain Orange and Orange Board);
+  waiting on The Corner Shop and One Orange Key.
+
+⏺ Agent "Sketch key group page" finished · 1m 59s
+
+⏺ Agent "Sketch shop group page" finished · 2m 14s
+
+  Read 4 files, ran 8 shell commands (ctrl+o to expand)
+
+⏺ Four new sketches are up at the page link, and I've checked each render. The
+  first screen shows an event post and a comment thread in all four, but the
+  photo post is still below the fold. Orange 500 on white is too low-contrast
+  for text (about 2.9:1), so orange text would need orange 700 in a real build. 
+  · summary
+
+❯ I like the The Corner Shop option. Let's just use the Tailwind default orange 
+  for it, so we don't have to reinvent colors. BTW, the font I used earlier     
+  was Recoleta (70's soft vibes), but serif is nice too. My Recoleta can't be   
+  used for open source, so maybe one of the things we should build later is     
+  easy support for switching the app-wide default font. Do we have a            
+  docs/todo.md already?                                                         
+
+  Ran 14 shell commands, no result recorded for 1 other call · 13 failed (ctrl+o to expand)
+  ⎿  $ '/Users/maragubot/.claude/plugins/cache/impeccable/impeccable/4.11.1/skills/impeccable/scripts/impeccable' serve-question --wait --key df177cdb
+  ⎿  Interrupted
+
+⏺ The Corner Shop it is. I'm closing the decision page and recording the choice.
+
+⏺ Stop Task
+  ⎿  python3 -I '/private/tmp/claude-502/-Users-maragubot-Developer-regroup
+     /2aaa5f42-49d5-4f4d-b314-004354df9083/scratchpad/relay.py' 57594 57593
+     · stopped
+
+  Read 2 files, listed 1 directory, ran 3 shell commands · 1 failed (ctrl+o to expand)
+
+❯ Maybe the design could be a bit bolder though                                 
+
+❯ I'm afraid it's a bit too bland                                               
+
+  Made 1 scratchpad edit +45, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Write(docs/todo.md)  ⎿  Wrote 6 lines to docs/todo.md
+      1 # To do
+      2 
+      3 What is agreed but not built, and open design questions. One file
+         per piece of work or area in `docs/todo/`. Delete an item when i
+        t is built.
+      4 
+      5 - [Group page](todo/group-page.md): the timeline of posts and com
+        ments first, then events, then photos.
+      6 - [Switchable default font](todo/font-switching.md): let a host c
+        hange the app-wide fonts easily.
+
+⏺ Write(docs/todo/group-page.md)
+  ⎿  Wrote 34 lines to docs/todo/group-page.md
+       1 # Group page
+       2 
+       3 The page a member opens: the group's timeline. Agreed with Marku
+         s on 2026-11-26. The design brief for it is in `.impeccable/surf
+         aces/`.
+       4 
+       5 ## Agreed
+       6 
+       7 - A group has one timeline, not topics. Markus: "maybe it's more
+          of a timeline", since events are coming.
+     … +27 lines (ctrl+o to expand)
+
+⏺ Write(docs/todo/font-switching.md)
+  ⎿  Wrote 15 lines to docs/todo/font-switching.md
+      1 # Switchable default font
+      2 
+      3 Let a host change the app-wide fonts easily.
+      4 
+      5 Markus on 2026-11-26: "the font I used earlier was Recoleta (70's
+         soft vibes) [...] My Recoleta can't be used for open source, so
+        maybe one of the things we should build later is easy support for
+         switching the app-wide default font."
+      6 
+      7 ## Why
+     … +8 lines (ctrl+o to expand)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Heard: The Corner Shop stays, but bolder. I'm reading the playbook for
+  amplifying a design, then I'll put bolder versions of it in front of you.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Write(.impeccable/mocks/decision-payload-3.json)
+  ⎿  Wrote 61 lines to .impeccable/mocks/decision-payload-3.json
+       1 {
+       2   "title": "The Corner Shop, bolder",
+       3   "question": "Same world, same colours and fonts. Each version 
+         makes one decisive move and keeps the rest quiet. Pick one, or s
+         teer (for example: combine two).",
+       4   "options": [
+       5     {
+       6       "id": "bold-sign",
+       7       "label": "The Sign",
+       8       "thesis": "The group's name becomes the shop sign: a full-
+     … +54 lines (~2 KB) (ctrl+o to expand)
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Agent(Sketch bold-sign variant) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent(Sketch bold-names variant) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent(Sketch bold-room variant) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Explore(Survey template auth and plumbing) Sonnet 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent "Survey template auth and plumbing" finished · 25s
+
+⏺ Three bolder versions of The Corner Shop are in progress, and you can choose
+  between them at the same link. I've also written docs/todo.md and will commit
+  it with the design brief once the bolder version is settled. · summary
+
+⏺ Agent "Sketch bold-sign variant" finished · 36s
+
+⏺ Agent "Sketch bold-names variant" finished · 50s
+
+⏺ Agent "Sketch bold-room variant" finished · 1m 3s
+
+  Read 6 files, listed 2 directories, ran 13 shell commands · 6 failed (ctrl+o to expand)
+
+⏺ All three bolder versions are up on the page, and I've checked each render.
+  I'll combine The Sign and The Names next if you want both, so say so in the
+  steer field or here. · summary
+
+❯ Maybe both The Sign and The Names? But the sign a little smaller. (And we may 
+  want to have the accent color configurable too, from the TailwindCSS default  
+  palette). I may want to walk back the font choice possibility, since it can   
+  change the layout drastically in a way color selection can't. Let's find a    
+  nice serif font for our design instead.                                       
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(docs/todo/accent-colour.md)
+  ⎿  Wrote 21 lines to docs/todo/accent-colour.md
+      1 # Configurable accent colour
+      2 
+      3 Let the accent colour be chosen from Tailwind's default palette.
+      4 
+      5 Markus on 2026-11-26: "we may want to have the accent color confi
+        gurable too, from the TailwindCSS default palette".
+      6 
+      7 ## Why
+      8 
+      9 Orange is the default, and we use Tailwind's default palette so t
+     … +13 lines (ctrl+o to expand)
+
+⏺ Update(docs/todo.md)
+  ⎿  Added 1 line, removed 1 line
+      3  What is agreed but not built, and open design questions. One fil
+         e per piece of work or area in `docs/todo/`. Delete an item when
+          it is built.
+      4 
+      5  - [Group page](todo/group-page.md): the timeline of posts and co
+         mments first, then events, then photos.
+      6 -- [Switchable default font](todo/font-switching.md): let a host 
+        -change the app-wide fonts easily.                               
+      6 +- [Configurable accent colour](todo/accent-colour.md): choose th
+        +e accent from Tailwind's default palette.                       
+
+⏺ Agent(Sketch combined sign and names) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent(Research open soft serif fonts) Opus 5.5  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Two agents are building a combined sketch and researching open-licence serifs,
+  and I'll show the candidate fonts set in the design once both are done. Pages
+  use primary colour names for now, and I need your answer on whether the host
+  picks the accent for the whole instance or per group. · summary
+
+⏺ Agent "Sketch combined sign and names" finished · 41s
+
+  Searched for 1 pattern, read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+⏺ The combined sketch is finished and looks right, with the orange "The Loft"
+  band and the "Today" and "Yesterday" headings on one left edge. I'm waiting on
+  the font research before placing it in each candidate serif. · summary
+
+⏺ Agent "Research open soft serif fonts" finished · 2m 26s
+
+⏺ Write(.impeccable/mocks/decision-payload-4.json)
+  ⎿  Wrote 97 lines to .impeccable/mocks/decision-payload-4.json
+       1 {
+       2   "title": "Choose the serif",
+       3   "question": "The Sign and The Names combined, with the sign sm
+         aller. The same page five times, each in a different open-licenc
+         e serif. Pick one, or steer.",
+       4   "options": [
+       5     {
+       6       "id": "font-fraunces",
+       7       "label": "Fraunces, soft",
+       8       "thesis": "Built from Recoleta's own two sources, Cooper a
+     … +90 lines (~3 KB) (ctrl+o to expand)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Agent(Font variants: Fraunces) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent(Font variants: Cooper and Corben) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ The font research is done and the preview page is updated; Fraunces is the
+  researcher's pick, with Cooper* as the alternative. Danish letters are
+  confirmed only for Cooper* and still need checking in the build for whichever
+  face you choose. · summary
+
+⏺ Agent "Font variants: Cooper and Corben" finished · 1m 6s
+
+⏺ Agent "Font variants: Fraunces" finished · 5m 47s
+
+⏺ All four font versions are written, but the Fraunces "soft and wonky" card
+  looks identical to the plain one at these sizes, so I'm having it corrected
+  and checking the other renders. · summary
+  ⎿  Resuming agent a76fe01
+
+  Read 3 files, ran 3 shell commands (ctrl+o to expand)
+
+❯ I like Young Serif, but it's only in one weight and no italics. Let's go with 
+  Fraunces, but don't load it from Google fonts. Is it an open font license?    
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ I've settled on Fraunces as the font, self-hosted and with its lean off by
+  default. Before a builder can start, the group page needs sign-in and group
+  membership, and I'll need three decisions from you on that. · summary
+
+⏺ Agent "Font variants: Fraunces" finished · 8m 26s
+
+  Ran 16 shell commands, no result recorded for 1 other call · 16 failed (ctrl+o to expand)
+  ⎿  $ '/Users/maragubot/.claude/plugins/cache/impeccable/impeccable/4.11.1/skills/impeccable/scripts/impeccable' serve-question --wait --key e173ccab
+  ⎿  Interrupted
+
+⏺ I've closed the decision page and its relay, since the look is settled and the
+  Fraunces lean was too faint at these sizes. I'm waiting on your answers to
+  the three questions about sign-in, invitations, and groups. · summary
+
+⏺ Stop Task
+  ⎿  python3 -I '/private/tmp/claude-502/-Users-maragubot-Developer-regroup
+     /2aaa5f42-49d5-4f4d-b314-004354df9083/scratchpad/relay.py' 57594
+     '61188' · stopped
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Answered Claude's questions:
+  ⎿  · How does a member sign in? → Emailed link (Recommended)
+     · How do people get into a group? → I think there'll be admins, moderators,
+     members. Moderators and up can invite.
+     · Can one instance hold several groups, with a person in more than one? → 
+     One instance, one group
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(PRODUCT.md)
+  ⎿  Added 2 lines, removed 2 lines
+       9  ## Users
+      10 
+      11  - **Members** of a private group. Regroup is for any private co
+          mmunity: people who already know each other, such as a shared o
+          ffice or a club, and online-only communities alike. A member jo
+          ins because someone they trust invited them.
+      12 -- **Group admins and moderators**, who are members looking afte
+         -r their own group.                                             
+      13 -- **Hosts**, who run a regroup instance. Anyone can host. Who t
+         -ypically hosts is not yet established.                         
+      12 +- **Admins and moderators**, who are members looking after thei
+         +r own group. A group has three roles: admin, moderator, and mem
+         +ber.                                                           
+      13 +- **Hosts**, who run a regroup instance. Anyone can host, and o
+         +ne instance holds one group. Who typically hosts is not yet est
+         +ablished.                                                      
+      14 
+      15  The first real group is Markus's shared office space. It is the
+           test case for deciding what to build first.
+      16 
+
+⏺ Update(PRODUCT.md)
+  ⎿  Added 5 lines, removed 1 line
+      40 
+      41  Confirmed for a group:
+      42 
+      43 +- One instance holds one group. A second group is a second inst
+         +allation.                                                      
+      44 +- One timeline of what was posted, in time order. Things stay w
+         +here they were posted, and a member sees a mark on what is new 
+         +to them.                                                       
+      45  - Discussions: posts and comments.
+      44 -- Events.                                                      
+      46 +- Events. An event is a post with a date, and upcoming events a
+         +lso have their own list.                                       
+      47  - Photos. Generic file sharing is not part of the product.
+      48 +- Members sign in with a link sent to their email address. Ther
+         +e are no passwords.                                            
+      49 +- People join by invitation. Moderators and admins can invite. 
+      50 
+      51  Confirmed by the core values (`docs/core-values.md`), which win
+           over any feature that conflicts with them:
+      52 
+
+⏺ Update(docs/research/soft-serif-fonts.md)
+  ⎿  Added 1 line, removed 1 line
+       6 
+       7  Regroup sets its display type in a soft, friendly serif: the gr
+          oup's name at about 90px on the orange band, day headings ("Tod
+          ay", "Yesterday") at about 64px, and people's names at about 36
+          px and 20px in dark orange on white. Body text is a separate sa
+          ns and is not covered here.
+       8 
+       9 -Markus's earlier design used Recoleta, which he describes as "7
+         -0's soft vibes". Recoleta blends the round softness of Cooper w
+         -ith the angled strokes of Windsor. It is a commercial Latinotyp
+         -e font and cannot ship in an MIT-licensed public repository. He
+         - has asked for "a nice serif font for our design instead", and 
+         -has walked back the idea of letting each group pick a font, so 
+         -this one face carries the whole look. The current stand-in is Y
+         -oung Serif.                                                    
+       9 +Markus's earlier design used Recoleta, which he describes as "7
+         +0's soft vibes". Recoleta blends the round softness of Cooper w
+         +ith the angled strokes of Windsor. It is a commercial Latinotyp
+         +e font and cannot ship in an MIT-licensed public repository. He
+         + has asked for "a nice serif font for our design instead", and 
+         +has walked back the idea of making the app-wide font switchable
+         +, so this one face carries the whole look. The current stand-in
+         + is Young Serif.                                               
+      10 
+      11  Each candidate had to meet one hard requirement: a licence that
+           allows the font files to be bundled in a public MIT-licensed r
+          epository and served from any self-hosted instance. The SIL Ope
+          n Font License 1.1 (OFL) meets it. The facts below come from ea
+          ch font's Google Fonts metadata (`METADATA.pb` in [google/fonts
+          ](https://github.com/google/fonts)), its own repository, and th
+          e Google Fonts CSS API. No font files were downloaded.
+      12 
+
+⏺ Update(docs/todo/accent-colour.md)
+  ⎿  Added 1 line, removed 1 line
+      12 
+      13  ## Open
+      14 
+      15 -- Who chooses: the host for the whole instance, or each group f
+         -or itself.                                                     
+      15 +- How it is chosen: in the host's configuration, or by an admin
+         + inside the app. One instance holds one group, so either way it
+         + applies to the whole group.                                   
+      16  - Which hues are offered. Some, such as yellow and lime, are to
+          o light to carry text or white labels, so each offered hue need
+          s checking for contrast.
+      17  - Nothing is designed yet. This is a later piece of work.
+      18 
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(docs/todo/group-page.md)
+  ⎿  Added 2 lines
+      11  - A group has discussions, events, and photos. It has no generi
+          c file sharing.
+      12  - The design covers posts, events, and photos. The first build
+          ships posts and comments. Events come next, then photos.
+      13  - The look is "The Corner Shop": a white page with minimal inte
+          rface, a soft serif for people's names and day headings, and Ta
+          ilwind's default orange. Markus: "Let's just use the Tailwind d
+          efault orange for it, so we don't have to reinvent colors."
+      14 +- It is the bolder version of that look, combining two moves. T
+         +he Sign: an orange band across the top carries the group's name
+         + very large. The Names: day headings are the largest type on th
+         +e page, and each author's name hangs large in orange in the lef
+         +t margin. Markus: "Maybe both The Sign and The Names? But the s
+         +ign a little smaller."                                         
+      15 +- The serif is Fraunces, under the SIL Open Font License. Marku
+         +s: "Let's go with Fraunces, but don't load it from Google fonts
+         +." The research behind the choice is in `docs/research/soft-ser
+         +if-fonts.md`.                                                  
+      16 
+      17  ## Decided by the lead, for Markus to overrule
+      18 
+
+⏺ Update(docs/todo/group-page.md)
+  ⎿  Added 2 lines, removed 1 line
+      18 
+      19  - A post has no title, only body text.
+      20  - Comments are a flat list, not nested, and open in place under
+           their post.
+      21 -- The serif is Young Serif and the sans is Source Sans 3. Both 
+         -have open licences and are served by the app itself, so no requ
+         -est goes to a font host.                                       
+      21 +- The sans is Source Sans 3. Both fonts are served by the app i
+         +tself, with their licence texts in the repository, so no reques
+         +t goes to a font host.                                         
+      22 +- Fraunces is set with its softness at full, its leaning letter
+         +s off, and heavier than in the sketch, towards the weight of Yo
+         +ung Serif, which Markus liked.                                 
+      23  - Orange text uses orange 700, because orange 500 on white has
+          too little contrast to read. Orange 500 is for fills and marks.
+      24 
+      25  ## Open
+
+⏺ Update(docs/todo/group-page.md)
+  ⎿  Removed 4 lines
+      24 
+      25  ## Open
+      26 
+      27 -- How a member signs in.                                       
+      28 -- How the first group and its first member come to exist on a n
+         -ew instance.                                                   
+      29 -- How people are invited, and who may invite.                  
+      30 -- Whether a member sees several groups, and how they move betwe
+         -en them.                                                       
+      27  - The layout on a phone.
+      28  - What a photo post and an event post look like in detail.
+      29  - What the real office group is called. The sketches used the m
+          ade-up name "The Loft".
+
+⏺ Write(docs/todo/people.md)
+  ⎿  Wrote 26 lines to docs/todo/people.md
+       1 # People: signing in, roles, and invitations
+       2 
+       3 What the group page needs before anyone can use it. Agreed with
+         Markus on 2026-11-26.
+       4 
+       5 ## Agreed
+       6 
+       7 - One instance holds one group.
+       8 - A member signs in with a link sent to their email address. The
+         re are no passwords.
+     … +18 lines (ctrl+o to expand)
+
+⏺ Update(docs/todo.md)
+  ⎿  Added 1 line
+      2 
+      3  What is agreed but not built, and open design questions. One fil
+         e per piece of work or area in `docs/todo/`. Delete an item when
+          it is built.
+      4 
+      5 +- [People](todo/people.md): signing in by emailed link, three ro
+        +les, and invitations.                                           
+      6  - [Group page](todo/group-page.md): the timeline of posts and co
+         mments first, then events, then photos.
+      7  - [Configurable accent colour](todo/accent-colour.md): choose th
+         e accent from Tailwind's default palette.
+
+⏺ Skill(fabrik:diary)
+  ⎿  Loaded skill
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Recording today's decisions (design brief, to-do notes, diary) and committing
+  them, then starting the first builder on sign-in, roles, and invitations.
+
+❯ Stop the builder                                                              
+
+  Made 1 scratchpad edit +46, read 1 file, ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(docs/diary/2026-11-26-first-group-page.md)
+  ⎿  Wrote 82 lines to docs/diary/2026-11-26-first-group-page.md
+      1 # Diary: The first group page
+      2 
+      3 Regroup is still its starter template. This diary covers the work
+         towards its first real surface, the group page: the product reco
+        rd and design direction agreed with Markus, the plumbing a group
+        needs before anyone can use it (signing in, roles, invitations),
+        and then the page itself.
+      4 
+      5 ## Step 1: Product record, design direction, and requirements
+      6 
+     … +76 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ No builder is running, and none was started: I had only announced it. Your
+  message arrived before the spawn, and I will not start one until you say so.
+
+  Nothing else of mine is running either. The sketch and research agents have
+  all finished, and the decision page and its relay are stopped.
+
+  What did land is documentation only, committed and pushed to PR #5 (still
+  open, not merged):
+
+  - PRODUCT.md, updated with one group per instance, the three roles, and
+    sign-in by emailed link.
+  - docs/todo.md with three files: people, group page, and accent colour.
+  - docs/research/soft-serif-fonts.md.
+  - The design brief for the group page.
+  - A diary entry for today.
+
+  What did you want to change or look at before building starts?
+
+❯ I'd like to settle on the design first (I think we're done?) and then figure  
+  out how we verify and test the product, now that I'm not reading code in this 
+  project. In ../s4ql it's comparatively easier, because I have a test oracle   
+  (sqlite) and use simulation testing, property-based testing, adversarial      
+  review, and a lot more. Let's figure out what we do in this project.          
+
+⏺ Agent(Survey s4ql verification practices) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Skill(fabrik:spec)  ⎿  Loaded skill
+
+⏺ Design direction is settled (The Corner Shop sign, Tailwind orange, Fraunces,
+  minimal interface), with phone layout, scroll behaviour and post formats left
+  open until the first build. I'm having a sub-agent survey what s4ql does so my
+  proposal rests on facts, then I'll bring it back one decision at a time. 
+  · summary
+
+⏺ Agent "Survey s4ql verification practices" finished · 1m 37s
+
+⏺ The s4ql survey is back, and its differential tests against SQLite won't
+  transfer, so I'm proposing we build our own oracle from the spec rules, a
+  small model of the group, generated histories, and core-value invariants. Once
+  you agree on the rules, I'll bring the remaining steps to you one at a time. 
+  · summary
+
+⏺ Answered Claude's questions:
+  ⎿  · What is regroup's test oracle: how do we know the right answer when 
+     nothing outside the project knows it? → I don't think we can have a test 
+     oracle. For product behavior, I guess I'm the oracle? But lean towards 
+     building something and then we can adjust. Nothing is in production until I
+     say so, so we can break stuff and iterate.
+
+⏺ Two separate questions need two separate answers: whether this is the product
+  you want, which only you can judge, so I'll give you a quick way to review
+  each piece and log your verdicts; and whether it still behaves as approved,
+  which stays with ordinary tests for now, with the heavier checks saved for
+  when you call it production. Next I'll settle how you'll review in practice. 
+  · summary
+
+⏺ Skill(fabrik:memory)
+  ⎿  Loaded skill
+
+⏺ Answered Claude's questions:
+  ⎿  · How do you want to judge each piece of work, given that you do not read 
+     the code? → Both
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Write(AGENTS.md)
+  ⎿  Added 4 lines
+      52  ### Conversation exports go straight to `main`
+      53 
+      54  Commit an export to `docs/conversations/` on `main` and push it
+          , with no branch and no pull request. Markus on 2026-11-26: "Wh
+          y does it go into a branch? Just push it to main".
+      55 +                                                               
+      56 +### Markus is the oracle for product behaviour; build first, th
+         +en adjust                                                      
+      57 +                                                               
+      58 +On 2026-11-26, asked what regroup's test oracle is, Markus said
+         +: "I don't think we can have a test oracle. For product behavio
+         +r, I guess I'm the oracle? But lean towards building something 
+         +and then we can adjust. Nothing is in production until I say so
+         +, so we can break stuff and iterate." So build a piece, show it
+         + to him, and adjust, instead of settling every rule or building
+         + heavy test machinery first. He chose the same day to judge eac
+         +h piece of work in two ways: a preview instance he uses himself
+         +, and a page of screenshots. What is agreed and what is open ab
+         +out verification is in `docs/todo/verification.md`.            
+
+⏺ Write(docs/todo/verification.md)
+  ⎿  Wrote 23 lines to docs/todo/verification.md
+      1 # Verification
+      2 
+      3 How we know regroup does what it should, given that Markus does n
+        ot read the code. Discussed on 2026-11-26.
+      4 
+      5 ## Agreed
+      6 
+      7 - Regroup has no test oracle. Nothing outside the project knows t
+        he right answer, as SQLite does for s4ql. For product behaviour,
+        Markus is the oracle: "For product behavior, I guess I'm the orac
+     … +17 lines (~2 KB) (ctrl+o to expand)
+
+⏺ Update(docs/todo.md)
+  ⎿  Added 1 line
+      2 
+      3  What is agreed but not built, and open design questions. One fil
+         e per piece of work or area in `docs/todo/`. Delete an item when
+          it is built.
+      4 
+      5 +- [Verification](todo/verification.md): Markus is the oracle; a 
+        +preview and screenshots now, heavier checks before production.  
+      6  - [People](todo/people.md): signing in by emailed link, three ro
+         les, and invitations.
+      7  - [Group page](todo/group-page.md): the timeline of posts and co
+         mments first, then events, then photos.
+      8  - [Configurable accent colour](todo/accent-colour.md): choose th
+         e accent from Tailwind's default palette.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ I've written up the verification plan in docs/todo/verification.md and
+  committed it to PR #5: light checks for now, your verdicts kept per piece of
+  work, and a preview of what's merged to main. What "production" requires is
+  left open as a proposal for you to decide, and since you judge by looking, I'd
+  build the group page early, though it needs a signed-in user. · summary
+
+⏺ Answered Claude's questions:
+  ⎿  · What gets built first? → Nothing yet
+
+⏺ No builder will start. What do you want to settle first?
+
+❯ I'd also like to use property-based testing with hegel in the Go code where   
+  it makes sense. https://hegel.dev (you have a hegel skill). Also, check out   
+  bombadil in a subagent, I've installed the CLI:                               
+  https://github.com/antithesishq/bombadil . And also the usual unit and        
+  integration testing, and fuzz testing where it makes sense. Let's make this   
+  app robust.                                                                   
+
+⏺ Two sub-agents are on it: one studying and trying bombadil with the installed
+  CLI, and one checking how hegel fits a Go web app like this, including why
+  s4ql evaluated it and did not adopt it. I'll come back with their findings and
+  a proposal for which kind of test goes where.
+
+❯ Oh, I didn't know we didn't adopt it in s4ql.                                 
+
+⏺ Agent(Research and try bombadil) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ Agent(Evaluate hegel for regroup) Opus 5.5
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+  Searched for 6 patterns, ran 1 shell command · 1 failed (ctrl+o to expand)
+
+⏺ I checked myself and my earlier claim was too strong: s4ql's Go files, go.mod,
+  Makefile and workflows never mention hegel, and its research note actually
+  recommends it, so the right wording is "researched, recommended, never
+  adopted". I'm verifying that the current Go library embeds its engine and
+  needs no Python or separate server at test time. · summary
+⏺ Agent "Evaluate hegel for regroup" finished · 4m 55s
+
+⏺ The hegel trial came back favourable: it runs as a plain Go test, shrinks
+  failures well, and suits regroup, though long stateful failures still shrink
+  poorly and replay is unverified. I'm still waiting on the bombadil agent. 
+  · summary
+
+⏺ Agent "Research and try bombadil" finished · 6m 1s
+
+  Searched for 1 pattern, read 2 files (ctrl+o to expand)
+
+⏺ Update(docs/todo/verification.md)
+  ⎿  Added 4 lines
+      21  - Whether time, randomness, and email should be replayable from
+           a seed from the start, as in s4ql, or added when the heavier c
+          hecks are.
+      22  - How sign-in emails reach Markus on the preview.
+      23  - Checks for the promises in the core values, such as that no p
+          age asks a third party for anything.
+      24 +                                                               
+      25 +## Found while evaluating tools                                
+      26 +                                                               
+      27 +- With the settings in `.env.example`, the content security pol
+         +icy blocks Datastar, so nothing interactive can run. Bombadil r
+         +eported it on its first run, and no Go test catches it. See `do
+         +cs/research/bombadil.md`. It has to be fixed before the first i
+         +nteractive page.                                               
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Both evaluations are in and committed as research notes
+  (docs/research/hegel.md and docs/research/bombadil.md).
+
+  Bombadil
+
+  It drives a real Chrome with random clicks, typing, back, and reload, and
+  checks properties written in TypeScript after every step. It is MIT-licensed,
+  at version 0.8.0, and has broken compatibility between minor versions, so we
+  would pin it.
+
+  - Found a real fault in its first second. With the settings .env.example
+    ships, the security policy blocks Datastar, so nothing interactive can run.
+    The fault was already noted in an old diary entry, but no Go test catches
+    it. I recorded it as a must-fix before the first interactive page.
+  - Custom checks work. A small check of the agent's own covered 1,214 page
+    states in a minute and found that the home page has an empty title.
+    Replaying the saved run reproduced it.
+  - Limits. It cannot read email, drive two people at once, or look at the
+    database. The trial only had a placeholder page to explore, so how it
+    behaves on a real timeline is unknown.
+
+  Proposed plan
+
+  Kind of test: Unit and integration, against real SQLite and the real router
+  What it is for here: Every behaviour, and every verdict you give
+  When it runs: Every pull request
+  ────────────────────────────────────────
+  Kind of test: Property-based with hegel, simple
+  What it is for here: Grouping by day across time zones, escaping of post
+    text, paging, sign-in tokens
+  When it runs: Every pull request
+  ────────────────────────────────────────
+  Kind of test: Property-based with hegel, stateful
+  What it is for here: Generated sequences of actions: people and roles,
+    sign-in links working once and expiring, timeline order and the "new"
+    marks
+  When it runs: Every pull request, longer runs nightly
+  ────────────────────────────────────────
+  Kind of test: Go fuzzing
+  What it is for here: Anything that parses what a person sends: form values,
+    paging cursors, later Markdown and photo uploads
+  When it runs: Short on every pull request, longer nightly
+  ────────────────────────────────────────
+  Kind of test: Bombadil
+  What it is for here: Browser faults, plus product rules as checks per role,
+    such as "a comment once shown never vanishes without a note"
+  When it runs: A short run per piece of work, nightly on main, not a merge
+    gate until it has run a while without false alarms
+  ────────────────────────────────────────
+  Kind of test: Screenshots and the preview
+  What it is for here: Your look
+  When it runs: Every piece of work
+
+  The three-role permission table gets a plain table test; it is too small to
+  need generated cases.
+
+  Decided by me, for you to overrule:
+
+  - Clock and randomness are injectable from the first build. Expiry tests and
+    the stateful tests need it, and it is expensive to add later.
+  - One test-only sign-in, compiled out of production. Bombadil and your preview
+    both need a way in without email. It is kept out by a build tag, so the
+    shipped binary does not contain it, and a test proves that.
+  - A nightly run opens an issue when it fails, as in s4ql.
+  - Mutation testing, reviews by other models, and a security review stay at the
+    production gate. They are not routine, given that mutation testing is
+    already slowing s4ql.
+
+  Does this match what you mean by robust? If yes, I write it into AGENTS.md as
+  the testing rules every builder follows.
+
+❯ yes                                                                           
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Write(AGENTS.md)
+  ⎿  Added 15 lines
+      23 
+      24  Query the SQLite database directly with `sqlite3 app.db`. Alway
+          s run `pragma foreign_keys = 1;` as the first statement after c
+          onnecting.
+      25 
+      26 +## Testing                                                     
+      27 +                                                               
+      28 +Markus does not read the code, so the tests carry the trust. He
+         + agreed these rules on 2026-11-26. The reasoning, and what is s
+         +till open, is in `docs/todo/verification.md`.                  
+      29 +                                                               
+      30 +- **Unit and integration tests** cover every behaviour, against
+         + real SQLite and the real router. A behaviour Markus has approv
+         +ed gets a test, so that a later change cannot quietly undo it. 
+      31 +- **Property-based tests with hegel** (`hegel.dev/go/hegel`; us
+         +e the `hegel` skill, and see `docs/research/hegel.md`) go where
+         +ver a rule must hold for many inputs or for any sequence of act
+         +ions. Simple properties suit things like grouping by day across
+         + time zones, escaping, paging, and tokens. Stateful ones (`hege
+         +l.RunStateful`) suit people and roles, sign-in links, and the t
+         +imeline with its "new" marks. Keep every failure hegel finds as
+         + a fixed test, because CI does not save them.                  
+      32 +- **Go fuzzing** covers anything that parses what a person send
+         +s.                                                             
+      33 +- **Bombadil** (see `docs/research/bombadil.md`; pin its versio
+         +n) explores the app in a real browser, with the product's rules
+         + written as checks for each role. Do a short run for each piece
+         + of work and a longer one nightly on `main`. It is not a merge 
+         +gate yet.                                                      
+      34 +- **A small table test, not generated cases,** covers who may d
+         +o what across the three roles.                                 
+      35 +- **The clock and randomness are passed in,** never read direct
+         +ly, so that expiry and generated histories can be replayed.    
+      36 +- **There is one test-only way to sign in,** behind a build tag
+         +. A test proves the production build does not contain it.      
+      37 +- **Every fix proves itself:** plant the fault, show that the n
+         +ew test fails, then take the fault out.                        
+      38 +- **Each piece of work ends with** a private page of screenshot
+         +s and a short list of things for Markus to try on the preview. 
+      39 +- **Mutation testing, reviews by other models, and a security r
+         +eview** belong to the gate before production. They are not rout
+         +ine.                                                           
+      40 +                                                               
+      41  ## Memory
+      42 
+      43  Agent memory for this project. Use the `memory` skill before ad
+          ding, changing, or removing entries.
+
+⏺ Write(docs/todo/verification.md)
+  ⎿  Added 28 lines, removed 5 lines
+      1  # Verification
+      2 
+      3 -How we know regroup does what it should, given that Markus does 
+        -not read the code. Discussed on 2026-11-26.                     
+      3 +How we know regroup does what it should, given that Markus does 
+        +not read the code. Discussed on 2026-11-26. The rules every buil
+        +der follows are in the Testing section of `AGENTS.md`. This file
+        + holds the reasoning and what is not built or not decided.      
+      4 
+      5  ## Agreed
+      6 
+     ...
+       8  - Markus judges each piece of work in two ways:
+       9    - A preview: a regroup instance on the Mac mini, reachable ov
+          er Tailscale, filled with a made-up office group and updated as
+           work lands. Each report from the lead ends with a short list o
+          f things to try.
+      10    - A private page of screenshots covering every new screen and
+           state, on desktop and phone.
+      11 +- The app is to be robust from the first build. Markus: "I'd al
+         +so like to use property-based testing with hegel in the Go code
+         + where it makes sense", and bombadil, "and also the usual unit 
+         +and integration testing, and fuzz testing where it makes sense.
+         + Let's make this app robust." He agreed the plan below the same
+         + day.                                                          
+      12 
+      13 +| Kind of test | What it is for here | When it runs |          
+      14 +|---|---|---|                                                  
+      15 +| Unit and integration, against real SQLite and the real router
+         + | Every behaviour, and every verdict Markus gives | Every pull
+         + request |                                                     
+      16 +| Property-based with hegel, simple | Grouping by day across ti
+         +me zones, escaping of post text, paging, sign-in tokens | Every
+         + pull request |                                                
+      17 +| Property-based with hegel, stateful | Generated sequences of 
+         +actions: people and roles, sign-in links working once and expir
+         +ing, timeline order and the "new" marks | Every pull request, l
+         +onger runs nightly |                                           
+      18 +| Go fuzzing | Anything that parses what a person sends: form v
+         +alues, paging cursors, later Markdown and photo uploads | Short
+         + on every pull request, longer nightly |                       
+      19 +| Bombadil | Browser faults, and product rules as checks per ro
+         +le | A short run per piece of work, nightly on `main`, not a me
+         +rge gate until it has run a while without false alarms |       
+      20 +| Screenshots and the preview | Markus's look | Every piece of 
+         +work |                                                         
+      21 +                                                               
+      22 +- The clock and randomness are passed in from the first build. 
+      23 +- There is one test-only way to sign in, used by bombadil and b
+         +y the preview, and it is compiled out of production by a build 
+         +tag.                                                           
+      24 +- A nightly run opens an issue when it fails.                  
+      25 +- Mutation testing, reviews by other models, and a security rev
+         +iew wait for the gate before production.                       
+      26 +                                                               
+      27  ## Decided by the lead, for Markus to overrule
+      28 
+      14 -- While the product is still taking shape, automated checking s
+         -tays light: the builders' ordinary tests, lint, CI on every pul
+         -l request, a fresh reviewer for each feature, and for every fix
+         - a test shown to fail with the fault in place.                 
+      15 -- Markus's verdicts are written into the to-do file of the piec
+         -e of work. A behaviour he has approved gets a test, so that lat
+         -er changes cannot quietly undo it. Where a verdict is a guarant
+         -ee the group can rely on, the lead proposes wording for `docs/s
+         -pec.md`.                                                       
+      29 +- Markus's verdicts are written into the to-do file of the piec
+         +e of work. Where a verdict is a guarantee the group can rely on
+         +, the lead proposes wording for `docs/spec.md`.                
+      30  - The preview runs what is merged to `main`.
+      31 
+      32 +## Not built yet                                               
+      33 +                                                               
+      34 +- The preview instance and its made-up office group.           
+      35 +- The nightly workflow.                                        
+      36 +- Hegel in `go.mod`, and `.hegel/` in `.gitignore`.            
+      37 +- A pinned bombadil, its checks, and a CI job that starts the a
+         +pp and keeps the trace.                                        
+      38 +- What bombadil needs from the app: a seeded database with one 
+         +person per role, stable markers on posts, comments, and moderat
+         +ion notes, and a visible error when a Datastar request fails.  
+      39 +                                                               
+      40  ## Open
+      41 
+      20 -- What has to be true before Markus says "production". The lead
+         -'s proposal, not yet discussed: a small model of a group checke
+         -d against generated histories of made-up people; a sweep that e
+         -very page refuses outsiders; reviews by other models with the s
+         -pec's rules as the things to break; planted faults and mutation
+         - testing to prove the tests have teeth; a security review of si
+         -gning in and invitations.                                      
+      21 -- Whether time, randomness, and email should be replayable from
+         - a seed from the start, as in s4ql, or added when the heavier c
+         -hecks are.                                                     
+      42 +- What else has to be true before Markus says "production", bey
+         +ond mutation testing, reviews by other models, and a security r
+         +eview.                                                         
+      43  - How sign-in emails reach Markus on the preview.
+      44  - Checks for the promises in the core values, such as that no p
+          age asks a third party for anything.
+      45 +- How well bombadil explores a real timeline. The trial only ha
+         +d a placeholder page.                                          
+      46 +- How well hegel shrinks long stateful failures, and whether a 
+         +failure can be replayed from its printed code.                 
+      47 
+      48  ## Found while evaluating tools
+      49 
+
+⏺ Update(docs/todo.md)
+  ⎿  Added 1 line, removed 1 line
+      2 
+      3  What is agreed but not built, and open design questions. One fil
+         e per piece of work or area in `docs/todo/`. Delete an item when
+          it is built.
+      4 
+      5 -- [Verification](todo/verification.md): Markus is the oracle; a 
+        -preview and screenshots now, heavier checks before production.  
+      5 +- [Verification](todo/verification.md): Markus is the oracle; th
+        +e agreed kinds of test, and what of them is not built yet.      
+      6  - [People](todo/people.md): signing in by emailed link, three ro
+         les, and invitations.
+      7  - [Group page](todo/group-page.md): the timeline of posts and co
+         mments first, then events, then photos.
+      8  - [Configurable accent colour](todo/accent-colour.md): choose th
+         e accent from Tailwind's default palette.
+
+  Ran 6 shell commands · 1 failed (ctrl+o to expand)
+
+⏺ The testing rules are in AGENTS.md as a new Testing section, committed and
+  pushed to PR #5 (still open). Every builder reads that file, so the rules
+  apply from the first build.
+
+  docs/todo/verification.md now holds the agreed plan with your words, a list of
+  what is not built yet (the preview, the nightly run, hegel and bombadil
+  wiring), and the open questions.
+
+  No builder is running. The question I asked before your testing message is
+  still open: what gets built first? My recommendation stands, and it now fits
+  the testing plan too:
+
+  1. The group page with made-up people. The timeline with posts and comments in
+     the settled design, on the preview, with the test-only sign-in that
+     bombadil and your preview both need. This build also sets up hegel, the
+     injectable clock, and the Datastar security fix.
+  2. Sign-in by emailed link, the three roles, and invitations.
+
+  Say "go" for that order, name the other one, or tell me what else you want
+  settled first.
+
+❯ go                                                                            
+
+⏺ Update(docs/todo/group-page.md)
+  ⎿  Added 7 lines
+      22  - Fraunces is set with its softness at full, its leaning letter
+          s off, and heavier than in the sketch, towards the weight of Yo
+          ung Serif, which Markus liked.
+      23  - Orange text uses orange 700, because orange 500 on white has
+          too little contrast to read. Orange 500 is for fills and marks.
+      24 
+      25 +- What counts as new to a reader. A post by someone else is new
+         + if it was posted since the reader's previous look at the timel
+         +ine. A comment by someone else is new until the reader opens th
+         +at post's comments. Nothing a person wrote is ever new to them,
+         + and nothing from before they joined is new. This is a first ve
+         +rsion for Markus to try on the preview.                        
+      26 +- Days are grouped in the group's own time zone, which the host
+         + sets in the configuration. One instance holds one group, and a
+         + group is usually in one place.                                
+      27 +- The first build shows no control for anything that is not bui
+         +lt. "Add event", "Add photo", "Coming up", and the notification
+         + setting appear when they work.                                
+      28 +- The sign scrolls away with the page. On a phone it is smaller
+         +, and each name sits above its post, not in a margin.          
+      29 +- Posts and comments are plain text with line breaks kept. Ther
+         +e is no formatting and no editing yet.                         
+      30 +- The work is split across builders in this order: the timeline
+         +'s data and rules; the page itself; the generated-history and f
+         +uzz tests; bombadil with its CI job and the nightly run; then t
+         +he design review and the preview.                              
+      31 +                                                               
+      32  ## Open
+      33 
+      34  - The layout on a phone.
+
+  Made 1 scratchpad edit +57, ran 4 shell commands (ctrl+o to expand)
+
+⏺ fabrik:builder(Builder: timeline data and rules)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ The first builder is running in the background, and I've split the group page
+  into five builds. Build 1 covers the timeline's data and rules, with the
+  preview and test sign-in; build 2 adds the page itself. I've also chosen
+  defaults for you to overrule, recorded in docs/todo/group-page.md. · summary
+
+⏺ The builder is still working. I'll report when it finishes, with what it
+  built, the decisions it made, and whether its fault-planting checks held.
