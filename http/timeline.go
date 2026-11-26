@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	. "maragu.dev/gomponents"
@@ -51,25 +50,11 @@ type timelineService interface {
 // why not. Nothing is read for it, since there is no page to show it in place on.
 //
 // Someone who is not signed in, or not active, gets nothing of the group from any of them.
-func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPRouterOptions) {
+//
+// The given token function gives each form that makes something its token.
+func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPRouterOptions, token func() string) {
 	group := opts.Group
 
-	if opts.Random == nil {
-		panic("http: no randomness for form tokens in InjectHTTPRouterOptions.Random")
-	}
-
-	// token for a form that makes something. Every form shown gets a new one.
-	var randomLock sync.Mutex
-	token := func() string {
-		randomLock.Lock()
-		defer randomLock.Unlock()
-
-		t, err := model.NewFormToken(opts.Random)
-		if err != nil {
-			panic("error reading randomness for a form token: " + err.Error())
-		}
-		return t.String()
-	}
 	posts := html.PostsProps{Token: token}
 
 	now := func() time.Time {

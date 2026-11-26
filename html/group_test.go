@@ -26,14 +26,14 @@ func TestGroupPage(t *testing.T) {
 		page := render(t, html.GroupPage(html.GroupPageProps{GroupName: "The Loft", Members: 14, UserName: "Signe", Now: now}))
 
 		is.True(t, strings.Contains(page, "<title>The Loft</title>"), page)
-		is.True(t, regexp.MustCompile(`<h1[^>]*>The Loft</h1>`).MatchString(page), page)
-		is.True(t, strings.Contains(page, "<span>14 members</span>"), page)
+		is.True(t, regexp.MustCompile(`<h1[^>]*><a href="/" aria-current="page" class="[^"]*">The Loft</a></h1>`).MatchString(page), page)
+		is.True(t, regexp.MustCompile(`<a href="/members" class="[^"]*">14 members</a>`).MatchString(page), page)
 	})
 
 	t.Run("counts one member as one member", func(t *testing.T) {
 		page := render(t, html.GroupPage(html.GroupPageProps{GroupName: "The Loft", Members: 1, Now: now}))
 
-		is.True(t, strings.Contains(page, "<span>1 member</span>"), page)
+		is.True(t, strings.Contains(page, ">1 member</a>"), page)
 	})
 
 	t.Run("puts what it is given beside the person's name on the sign, and nothing when it is given nothing", func(t *testing.T) {
@@ -41,7 +41,7 @@ func TestGroupPage(t *testing.T) {
 		is.True(t, strings.Contains(page, `<a href="/somewhere">Somewhere</a>`), page)
 
 		page = render(t, html.GroupPage(html.GroupPageProps{GroupName: "The Loft", Now: now}))
-		is.True(t, !strings.Contains(page, "<a "), page)
+		is.True(t, !strings.Contains(page, "/somewhere"), page)
 	})
 
 	t.Run("says that a request failed in a place that is hidden until one does, and turns the buttons of what is being sent off until its own request has been answered", func(t *testing.T) {
@@ -126,6 +126,12 @@ func TestGroupPage(t *testing.T) {
 			forms = append(forms, attribute(n, "action"))
 			is.Equal(t, "post", attribute(n, "method"))
 
+			// Signing out leaves the page, so its form is a plain one.
+			if attribute(n, "action") == "/logout" {
+				is.Equal(t, "", attribute(n, "data-on:submit"))
+				continue
+			}
+
 			// The form that opens the comments is sent by the element around it, when that opens.
 			if attribute(n, "action") == "/comments/open" {
 				is.Equal(t, "", attribute(n, "data-on:submit"))
@@ -142,7 +148,7 @@ func TestGroupPage(t *testing.T) {
 			// caught, and shown in the failure bar.
 			is.Equal(t, "@post('"+attribute(n, "action")+"', {contentType: 'form', retryMaxCount: 0, requestCancellation: 'disabled'}).catch(() => $_failed = true)", attribute(n, "data-on:submit"))
 		}
-		is.EqualSlice(t, []string{"/posts", "/comments/open", "/comments", "/posts/earlier"}, forms)
+		is.EqualSlice(t, []string{"/logout", "/posts", "/comments/open", "/comments", "/posts/earlier"}, forms)
 	})
 
 	t.Run("marks the name of the person the page is for, and the name of the author of every post and comment, with stable markers", func(t *testing.T) {
@@ -249,7 +255,7 @@ func TestGroupPage(t *testing.T) {
 				case attribute(n, "data-body") != "" || len(n.Attr) > 0 && n.Attr[0].Key == "data-body":
 					bodies++
 					expected = body
-				case n.Data == "h1" || n.Data == "h3" || n.Data == "title":
+				case n.Data == "a" && n.Parent.Data == "h1" || n.Data == "h3" || n.Data == "title":
 					names++
 					expected = shown
 				default:
@@ -426,23 +432,6 @@ func textareaOf(t *testing.T, form Node) *nethtml.Node {
 	return fields[0]
 }
 
-func TestPrivatePage(t *testing.T) {
-	t.Run("says only that the group is private", func(t *testing.T) {
-		page := render(t, html.PrivatePage(html.PrivatePageProps{}))
-
-		is.True(t, strings.Contains(page, "<title>regroup</title>"), page)
-		is.True(t, regexp.MustCompile(`<main><div[^>]*><div[^>]*><div[^>]*>regroup</div><h1[^>]*>This group is private\.</h1></div></div></main>`).MatchString(page), page)
-		is.True(t, !strings.Contains(page, "<a "), page)
-		is.True(t, !strings.Contains(page, "<form"), page)
-	})
-
-	t.Run("puts what it is given under the sign", func(t *testing.T) {
-		page := render(t, html.PrivatePage(html.PrivatePageProps{Extra: A(Href("/somewhere"), Text("Somewhere"))}))
-
-		is.True(t, regexp.MustCompile(`<p[^>]*><a href="/somewhere">Somewhere</a></p></main>`).MatchString(page), page)
-	})
-}
-
 func TestAnnouncement(t *testing.T) {
 	t.Run("is the live region with the given words in it, in an element named after what they are about", func(t *testing.T) {
 		is.Equal(t, `<p id="announcement" role="status" aria-live="polite" class="sr-only"><span id="announcement-p_1">Your post is on the timeline.</span></p>`,
@@ -565,7 +554,7 @@ func TestComments(t *testing.T) {
 		is.True(t, regexp.MustCompile(`<div id="post-p_1-comments" class="peer"><ol class="[^"]*\bmotion-safe:animate-fade-in\b[^"]*">`).MatchString(list), list)
 
 		// Nothing else on any page moves.
-		for _, path := range []string{"common.go", "group.go"} {
+		for _, path := range []string{"common.go", "group.go", "people.go"} {
 			source, err := os.ReadFile(path)
 			is.NotError(t, err)
 			for _, class := range regexp.MustCompile(`[\w:-]*(?:animate|transition|duration)-[\w-]*`).FindAllString(string(source), -1) {

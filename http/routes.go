@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	. "maragu.dev/gomponents"
@@ -35,16 +36,37 @@ type InjectHTTPRouterOptions struct {
 
 // InjectHTTPRouter returns what adds the app's routes to a router. No response of theirs may be stored.
 func InjectHTTPRouter(log *slog.Logger, svc *service.Fat, opts InjectHTTPRouterOptions) func(*Router) {
+	if opts.Random == nil {
+		panic("http: no randomness for form tokens in InjectHTTPRouterOptions.Random")
+	}
+	token := formTokens(opts.Random)
+
 	return func(r *Router) {
 		r.Use(noStore, noReferrer, AddUserToContext(log, svc))
 
 		r.Group(func(r *Router) {
-			timeline(r, log, svc, opts)
+			timeline(r, log, svc, opts, token)
 		})
 
 		r.Group(func(r *Router) {
-			people(r, log, svc)
+			people(r, log, svc, opts, token)
 		})
+	}
+}
+
+// formTokens returns what gives a form that makes something its token, from the given randomness, which
+// it reads one at a time. Every form shown gets a new one. It panics if the randomness cannot be read.
+func formTokens(random io.Reader) func() string {
+	var lock sync.Mutex
+	return func() string {
+		lock.Lock()
+		defer lock.Unlock()
+
+		t, err := model.NewFormToken(random)
+		if err != nil {
+			panic("error reading randomness for a form token: " + err.Error())
+		}
+		return t.String()
 	}
 }
 

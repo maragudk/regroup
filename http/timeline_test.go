@@ -50,7 +50,7 @@ import (
 var base = time.Date(2031, 3, 14, 9, 0, 0, 0, time.UTC)
 
 func TestTimeline(t *testing.T) {
-	t.Run("shows someone who is not signed in only that the group is private", func(t *testing.T) {
+	t.Run("shows someone who is not signed in only that the group is private, with the field to ask for a sign-in link", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake in the kitchen.")
@@ -70,7 +70,8 @@ func TestTimeline(t *testing.T) {
 		for _, secret := range []string{"The Loft", "Cake", "carrot", "Signe", "member", post.ID.String()} {
 			is.True(t, !strings.Contains(page, secret), "the page has "+secret+" in it:\n"+page)
 		}
-		is.Equal(t, 0, len(all(doc, tag("form"))))
+		is.EqualSlice(t, []string{"/sign-in"}, attrs(all(doc, tag("form")), "action"))
+		is.EqualSlice(t, []string{"email"}, attrs(all(doc, tag("input")), "name"))
 		is.Equal(t, 0, len(all(doc, tag("a"))))
 	})
 
@@ -283,9 +284,9 @@ func TestTimeline(t *testing.T) {
 
 		doc := parse(t, a.get(t, a.signIn(t, signe), "/").Body.String())
 
-		is.Equal(t, 0, len(all(doc, tag("a"))))
-		is.EqualSlice(t, []string{"Post", "Comment"}, texts(all(doc, tag("button"))))
-		is.EqualSlice(t, []string{"/posts", "/comments/open", "/comments", "/posts/earlier"}, attrs(all(doc, tag("form")), "action"))
+		is.EqualSlice(t, []string{"/members", "/"}, attrs(all(doc, tag("a")), "href"))
+		is.EqualSlice(t, []string{"Sign out", "Post", "Comment"}, texts(all(doc, tag("button"))))
+		is.EqualSlice(t, []string{"/logout", "/posts", "/comments/open", "/comments", "/posts/earlier"}, attrs(all(doc, tag("form")), "action"))
 		is.Equal(t, 0, len(all(doc, tag("input")))-len(all(doc, func(n *nethtml.Node) bool { return n.Data == "input" && attr(n, "type") == "hidden" })))
 	})
 
@@ -2164,9 +2165,13 @@ func TestInjectHTTPRouter(t *testing.T) {
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 
 		for _, cookie := range []*http.Cookie{nil, a.signIn(t, signe)} {
-			page := a.get(t, cookie, "/").Body.String()
-			is.Equal(t, 0, len(all(parse(t, page), tag("a"))))
-			is.True(t, !strings.Contains(page, "preview"), page)
+			for _, path := range []string{"/", "/members"} {
+				page := a.get(t, cookie, path).Body.String()
+				is.Equal(t, 0, len(all(parse(t, page), func(n *nethtml.Node) bool {
+					return n.Data == "a" && attr(n, "href") != "/members" && attr(n, "href") != "/"
+				})))
+				is.True(t, !strings.Contains(page, "preview"), page)
+			}
 		}
 	})
 
@@ -2182,8 +2187,14 @@ func TestInjectHTTPRouter(t *testing.T) {
 		is.Equal(t, "/preview", attr(link, "href"))
 		is.Equal(t, "signed in: false", text(link))
 
-		link = one(t, one(t, parse(t, a.get(t, a.signIn(t, signe), "/").Body.String()), tag("header")), tag("a"))
-		is.Equal(t, "signed in: true", text(link))
+		for _, path := range []string{"/", "/members"} {
+			link = one(t, one(t, parse(t, a.get(t, a.signIn(t, signe), path).Body.String()), tag("header")), func(n *nethtml.Node) bool { return attr(n, "href") == "/preview" })
+			is.Equal(t, "signed in: true", text(link))
+		}
+		for _, path := range []string{"/sign-in", "/members", "/sign-in/link?token=garbage"} {
+			link = one(t, parse(t, a.get(t, nil, path).Body.String()), func(n *nethtml.Node) bool { return attr(n, "href") == "/preview" })
+			is.Equal(t, "signed in: false", text(link))
+		}
 	})
 }
 
@@ -3014,6 +3025,10 @@ func (a *app) route(group model.Group, extra func(signedIn bool) Node, pageSize 
 	service.SendInvitation(fat, a.db, a.sender, a.clock.Now, random, group)
 	service.CheckInvitation(fat, a.db, a.clock.Now)
 	service.AcceptInvitation(fat, a.db, a.clock.Now)
+	service.ListMembers(fat, a.db)
+	service.GetInvitations(fat, a.db, a.clock.Now)
+	service.WithdrawInvitation(fat, a.db, a.clock.Now)
+	service.ChangeRole(fat, a.db)
 	a.fat = fat
 
 	// The same middleware as [gluehttp.Server] puts in front of every page, in its order and nesting.
@@ -3024,6 +3039,7 @@ func (a *app) route(group model.Group, extra func(signedIn bool) Node, pageSize 
 		r.Use(httph.NoClickjacking, httph.ContentSecurityPolicy(apphttp.CSP(false)))
 		r.Use(a.sm.LoadAndSave, gluehttp.Authenticate(log, a.sm, a.db))
 		r.NotFound(gluehttp.NotFound(html.Page))
+		gluehttp.Logout(r, log, a.sm, html.Page)
 
 		r.Group(func(r *gluehttp.Router) {
 			apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{
