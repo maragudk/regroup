@@ -456,7 +456,7 @@ The brief asked for the model to be obviously right, so it is written from the r
 - I repeated step 4's mistake once: `String.prototype.replace` with a replacement holding a dollar sign followed by a backtick (where a regular expression ending in `-posts)$` closed a Go raw string) spliced the text before the match into `/http/timeline_test.go`, which grew to 4,951 lines and failed with `illegal character U+0024 '$'`. I checked the file out again and made the edits with the literal `edit`.
 - The End key in a playwright check scrolled the page to the bottom (Chrome scrolls the page when the caret is already at the end of a textarea), which looked like the focus code scrolling. Without the End key the page stayed at the top.
 - `golangci-lint`: `SA4010: this result of append is never used` in the invariant, a left-over list. Removed.
-- CI, after the first push of the histories with 50 and 30 cases: the test job took 3m33s against 2m37s before, with `app/http` at 21s and `app/service` at 17s against 4.9s and 1.5s, and `app/cmd/app` at 57s against 38s, from sharing the runner's cores. The build step alone went from 44s to 63s in the same run, so part of it is the runner. I lowered the counts to 30 and 20.
+- CI, after the first push of the histories with 50 and 30 cases: the test job took 3m33s against 2m37s before, with `app/http` at 21s and `app/service` at 17s against 4.9s and 1.5s, and `app/cmd/app` at 57s against 38s, from sharing the runner's cores. The build step alone went from 44s to 63s in the same run, so part of it is the runner. I lowered the counts to 30 and 20, and the next run's test job took 2m47s, with `app/http` at 11.2s, `app/service` at 7.8s, and `app/cmd/app` at 42s.
 
 ### What I learned
 
