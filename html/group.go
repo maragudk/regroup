@@ -179,7 +179,7 @@ func textarea(id, placeholder, rows, value string, invalid bool, messageID, clas
 	return Textarea(ID(id), Name("body"), Rows(rows), Placeholder(placeholder),
 		If(invalid, Aria("invalid", "true")),
 		If(invalid, Aria("describedby", messageID)),
-		Class("field-sizing-content max-h-[50vh] w-full min-w-0 resize-none rounded-[26px] border border-stone-500 bg-white leading-[26px] text-stone-900 caret-primary-700 placeholder:text-stone-500 hover:border-stone-900 focus:border-primary-700 "+class),
+		Class("field-sizing-content max-h-[50vh] w-full min-w-0 resize-none rounded-[26px] border border-stone-500 bg-white leading-[26px] text-stone-900 caret-primary-700 placeholder:text-stone-500 hover:border-stone-900 focus-visible:border-primary-700 focus-visible:-outline-offset-1 "+class),
 		// The browser drops a line break right after the opening tag, so one goes first.
 		Text("\n"+value),
 	)
