@@ -34,6 +34,7 @@ How we know regroup does what it should, given that Markus does not read the cod
 - The preview instance. Its made-up office group and its one way to sign in as anyone are built behind the `preview` build tag (`make preview`).
 - The nightly workflow.
 - A pinned bombadil, its checks, and a CI job that starts the app and keeps the trace.
+- A check in CI of the built stylesheet itself. CI's tests check only what it is built from, and the Docker build in CI checks only that the built file names no other host.
 - What bombadil still needs from the app: a seeded database with one person per role, and stable markers on moderation notes. Posts, comments, days, and the "new" mark have stable markers, and a failed Datastar request shows the message in `#request-failed`. They are listed in step 3 of `docs/diary/2026-11-26-first-group-page.md`.
 
 ## Open

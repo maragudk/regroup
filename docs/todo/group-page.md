@@ -31,13 +31,21 @@ The page a member opens: the group's timeline. Agreed with Markus on 2026-11-26.
 - Details chosen by the page builder are in step 3 of the same diary: the wording on the page, what the sign carries, how comments and earlier posts are asked for, and what a browser without JavaScript gets.
 - Opening or reloading the timeline counts as a look, so a reload clears the marks on posts. Posting, commenting, and loading earlier posts happen in place and do not count as a look.
 - Until sign-in is built, a visitor who is not signed in sees only "This group is private." The people build decides what the sign-in page shows, including whether it names the group.
-- The work is split across builders in this order: the timeline's data and rules; the page itself; the generated-history and fuzz tests; bombadil with its CI job and the nightly run; then the design review and the preview.
+- The app's icon is a plain square in the primary orange, served by the app itself.
+- The rest of the work is split across builders in this order: the generated-history and fuzz tests; bombadil with its CI job and the nightly run; then the design review and the preview.
 
 ## Open
 
 - The layout on a phone.
 - What a photo post and an event post look like in detail.
 - What the real office group is called. The sketches used the made-up name "The Loft".
+
+## Known and not fixed
+
+- A page left open over midnight keeps "Today" until someone posts or reloads.
+- The not-found page is sent without `Cache-Control: no-store`. It shows nothing of the group. Fixing it needs a change in glue.
+- After posting or commenting with the keyboard, the focus falls back to the page, because the button that was pressed is turned off while the request is on its way.
+- The icon is a fixed orange square, so it will not follow a configured accent colour.
 
 ## Not in the first build
 
