@@ -1,5 +1,5 @@
-// What the checks in spec.ts read from the group page, and what they keep in the browser between
-// states. Everything here runs in the page, called from the extractors and custom actions in spec.ts.
+// What bombadil's checks of the group page read from it, and what they keep in the browser between
+// states. Everything here runs in the page.
 //
 // The page has stable markers for most of what is read here (see step 3 of
 // docs/diary/2026-11-26-first-group-page.md). Three things have none yet, and are found by the
@@ -92,11 +92,15 @@ export function isShown(window: Window, element: Element | null): boolean {
 
 // ---- What the server keeps of a body ----
 
+// The longest post and comment, in characters, as model.PostBodyMaxLength and model.CommentBodyMaxLength.
+export const postMaxLength = 10_000;
+export const commentMaxLength = 2_000;
+
 export type Cleaned = { body: string } | { refused: string };
 
-// clean a body by the rules of model.CleanPostBody and model.CleanCommentBody, as the browser sends it.
-// The browser sends a lone surrogate as U+FFFD. Go's unicode.IsSpace is the White_Space property, and
-// unicode.IsControl is the Cc category.
+// clean a body by the rules of model.CleanPostBody and model.CleanCommentBody, as the browser sends it:
+// whitespace is the Unicode White_Space property, control characters the Cc category, and invisible
+// formatting the Cf category. The browser sends a lone surrogate as U+FFFD.
 export function clean(raw: string, maxLength: number): Cleaned {
   let body = raw.toWellFormed().replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   body = body.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
@@ -109,8 +113,13 @@ export function clean(raw: string, maxLength: number): Cleaned {
 // ---- What is kept in the browser ----
 
 // The person is signed in, as far as this browser tab knows. Session storage outlives the page, but not
-// the tab, and a run has one tab. It is set when a sign-in form is sent, and cleared on signing out.
-export const signedInKey = "regroup-bombadil-signed-in";
+// the tab, and a run has one tab. It is set when a sign-in form is sent, and cleared by forgetSignIn.
+const signedInKey = "regroup-bombadil-signed-in";
+
+// forgetSignIn, for when the person signs out.
+export function forgetSignIn(window: Window) {
+  window.sessionStorage.removeItem(signedInKey);
+}
 
 // Names of the group and of the people in it, as seen on pages for someone signed in, and on the
 // preview's list of people. Local storage outlives the page, so the private page can be checked for them.
@@ -146,7 +155,10 @@ type Pending = {
   started: boolean;
   // Something was typed into the form after it was sent.
   typed: boolean;
-  check: (typed: boolean) => string[];
+  // Another request from the same element was on its way at the same time, so their answers can show
+  // each other's effects.
+  overlapped: boolean;
+  check: (p: Pending) => string[];
 };
 
 export type Recorder = {
@@ -157,6 +169,10 @@ export type Recorder = {
   failed: string[];
   // Each content security policy violation.
   violations: string[];
+  // A request failed, and no other has started since. The page says so until one does.
+  failing: boolean;
+  // The page was restored from the browser's back/forward cache, so what it shows may be out of date.
+  restored: boolean;
 };
 
 declare global {
@@ -165,18 +181,31 @@ declare global {
   }
 }
 
-// recorder of this page, set up on the first call. The extractors call it on every state, so it is set
-// up on the first state of a page, before any action on it.
+// recorder of this page, set up on the first call. To see every request, it must be called before
+// anything is done on the page.
 export function recorder(window: Window): Recorder {
   if (window.regroupBombadil) return window.regroupBombadil;
 
   const document = window.document;
-  const r: Recorder = { pending: [], wrong: [], failed: [], violations: [] };
+  const r: Recorder = { pending: [], wrong: [], failed: [], violations: [], failing: false, restored: false };
   window.regroupBombadil = r;
 
-  const expect = (what: string, element: string, check: (typed: boolean) => string[]) => {
-    r.pending.push({ what, element, sent: Date.now(), started: false, typed: false, check });
+  // The resource timings that the checks read stop at 250 by default.
+  window.performance.setResourceTimingBufferSize(100_000);
+
+  const expect = (what: string, element: string, check: (p: Pending) => string[]) => {
+    const p: Pending = { what, element, sent: Date.now(), started: false, typed: false, overlapped: false, check };
+    for (const other of r.pending) {
+      if (other.element === element) other.overlapped = p.overlapped = true;
+    }
+    r.pending.push(p);
   };
+
+  window.addEventListener("pageshow", (event) => {
+    if (!event.persisted) return;
+    r.restored = true;
+    r.pending = [];
+  });
 
   document.addEventListener(
     "submit",
@@ -193,20 +222,20 @@ export function recorder(window: Window): Recorder {
       const me = personName(document);
 
       if (form.id === "composer") {
-        const cleaned = clean(raw, 10_000);
+        const cleaned = clean(raw, postMaxLength);
         const before = posts(document);
-        expect("post " + JSON.stringify(raw.slice(0, 200)), form.id, (typed) => checkPost(document, raw, cleaned, before, me, typed));
+        expect("post " + JSON.stringify(raw.slice(0, 200)), form.id, (p) => checkPost(document, raw, cleaned, before, me, p.typed));
         return;
       }
 
       const comment = /^post-(.+)-comment-form$/.exec(form.id);
       if (comment) {
         const postID = comment[1]!;
-        const cleaned = clean(raw, 2_000);
+        const cleaned = clean(raw, commentMaxLength);
         const before = comments(document, postID);
         const count = summary(document, postID).count;
-        expect("comment " + JSON.stringify(raw.slice(0, 200)) + " on " + postID, form.id, (typed) =>
-          checkComment(document, postID, raw, cleaned, before, count, me, typed),
+        expect("comment " + JSON.stringify(raw.slice(0, 200)) + " on " + postID, form.id, (p) =>
+          checkComment(document, postID, raw, cleaned, before, r.restored || p.overlapped ? null : count, me, p.typed),
         );
         return;
       }
@@ -232,9 +261,11 @@ export function recorder(window: Window): Recorder {
       if (!thread) return;
       const postID = thread[1]!;
       const fresh = summary(document, postID).fresh;
-      expect("opening the comments of " + postID, details.id, () => {
-        const commenting = r.pending.some((p) => p.element === "post-" + postID + "-comment-form");
-        return checkOpen(document, postID, fresh, commenting);
+      // The count of new comments is compared only if nothing else could have changed it: no other
+      // opening or comment on the way, and a page that was not restored, whose count may be out of date.
+      expect("opening the comments of " + postID, details.id, (p) => {
+        const commenting = r.pending.some((other) => other.element === "post-" + postID + "-comment-form");
+        return checkOpen(document, postID, p.overlapped || commenting || r.restored ? null : fresh);
       });
     },
     true,
@@ -255,12 +286,14 @@ export function recorder(window: Window): Recorder {
     const element = detail.el?.id ?? "";
     switch (detail.type) {
       case "started": {
+        r.failing = false;
         const p = r.pending.find((p) => p.element === element && !p.started);
         if (p) p.started = true;
         break;
       }
       case "error":
       case "retries-failed": {
+        r.failing = true;
         r.failed.push(element + ": " + detail.type + " " + JSON.stringify(detail.argsRaw ?? {}));
         // What the page shows after a failed request is the failure bar's business, not this answer's.
         const i = r.pending.findIndex((p) => p.element === element && p.started);
@@ -271,7 +304,7 @@ export function recorder(window: Window): Recorder {
         const i = r.pending.findIndex((p) => p.element === element && p.started);
         if (i < 0) break;
         const [p] = r.pending.splice(i, 1);
-        for (const problem of p!.check(p!.typed)) r.wrong.push(p!.what + ": " + problem);
+        for (const problem of p!.check(p!)) r.wrong.push(p!.what + ": " + problem);
         break;
       }
     }
@@ -308,6 +341,21 @@ export function overdue(r: Recorder, millis: number): string[] {
 
 // ---- What an answer must have left on the page ----
 
+// echoed text, as a refusal puts it back in its field: through HTML, which has no NUL.
+function echoed(raw: string): string {
+  return raw.toWellFormed().replace(/\0/g, "\u{fffd}");
+}
+
+// refusalProblems: the message beside the field says why the text was refused.
+function refusalProblems(reason: string, message: string, kind: string): string[] {
+  const expected: Record<string, string> = {
+    empty: "Write something first.",
+    "too long": "That is too long. A " + kind + " can be up to " + (kind === "post" ? postMaxLength : commentMaxLength).toLocaleString("en") + " characters.",
+    invalid: "That text has characters that cannot be used here. Remove them and try again.",
+  };
+  return message === expected[reason] ? [] : ["expected it refused as " + reason + " with " + JSON.stringify(expected[reason]) + ", but the message is " + JSON.stringify(message)];
+}
+
 function checkPost(document: Document, raw: string, cleaned: Cleaned, before: PagePost[], me: string | null, typed: boolean): string[] {
   const problems: string[] = [];
   const after = posts(document);
@@ -315,9 +363,9 @@ function checkPost(document: Document, raw: string, cleaned: Cleaned, before: Pa
   const message = document.querySelector("#composer [role=alert]")?.textContent?.trim() ?? "";
 
   if ("refused" in cleaned) {
-    if (message === "") problems.push("expected it refused as " + cleaned.refused + ", but no message says why");
-    if (after.length !== before.length || after[0]?.id !== before[0]?.id) problems.push("expected it refused as " + cleaned.refused + ", but the timeline changed");
-    if (!typed && field?.value !== raw.toWellFormed()) problems.push("the field no longer holds what was written, but " + JSON.stringify(field?.value?.slice(0, 200)));
+    problems.push(...refusalProblems(cleaned.refused, message, "post"));
+    if (after[0]?.id !== before[0]?.id) problems.push("expected it refused as " + cleaned.refused + ", but a post was added to the top");
+    if (!typed && field?.value !== echoed(raw)) problems.push("the field no longer holds what was written, but " + JSON.stringify(field?.value?.slice(0, 200)));
     return problems;
   }
 
@@ -329,8 +377,8 @@ function checkPost(document: Document, raw: string, cleaned: Cleaned, before: Pa
   if (top.body !== body) problems.push("the top post reads " + JSON.stringify(top.body.slice(0, 200)) + ", expected " + JSON.stringify(body.slice(0, 200)));
   if (top.markup) problems.push("the top post's text has elements in it");
   if (me !== null && top.author !== me) problems.push("the top post is by " + JSON.stringify(top.author) + ", expected " + JSON.stringify(me));
-  const same = (list: PagePost[]) => list.filter((p) => p.body === body).length;
-  if (same(after) !== same(before) + 1) problems.push(same(after) + " posts read so, and " + same(before) + " did before");
+  const added = after.filter((p) => p.body === body && !before.some((b) => b.id === p.id)).length;
+  if (added !== 1) problems.push(added + " new posts read so");
   if (!typed && field?.value !== "") problems.push("the field still holds " + JSON.stringify(field?.value?.slice(0, 200)));
   return problems;
 }
@@ -341,6 +389,7 @@ function checkComment(
   raw: string,
   cleaned: Cleaned,
   before: PageComment[],
+  // count the summary gave when the comment was sent, or null if another request may have changed it.
   count: number | null,
   me: string | null,
   typed: boolean,
@@ -353,43 +402,47 @@ function checkComment(
   const message = form?.querySelector("[role=alert]")?.textContent?.trim() ?? "";
 
   if ("refused" in cleaned) {
-    if (message === "") problems.push("expected it refused as " + cleaned.refused + ", but no message says why");
-    if (now !== count) problems.push("expected it refused as " + cleaned.refused + ", but the count went from " + count + " to " + now);
-    if (!typed && field?.value !== raw.toWellFormed()) problems.push("the field no longer holds what was written, but " + JSON.stringify(field?.value?.slice(0, 200)));
+    problems.push(...refusalProblems(cleaned.refused, message, "comment"));
+    if (count !== null && now !== count) problems.push("expected it refused as " + cleaned.refused + ", but the count went from " + count + " to " + now);
+    if (!typed && field?.value !== echoed(raw)) problems.push("the field no longer holds what was written, but " + JSON.stringify(field?.value?.slice(0, 200)));
     return problems;
   }
 
   const body = cleaned.body;
-  const last = after.at(-1);
   if (message !== "") problems.push("refused with " + JSON.stringify(message));
-  if (!last) return [...problems, "the post shows no comments"];
-  if (before.some((c) => c.id === last.id)) problems.push("the last comment " + last.id + " was there before");
-  if (last.body !== body) problems.push("the last comment reads " + JSON.stringify(last.body.slice(0, 200)) + ", expected " + JSON.stringify(body.slice(0, 200)));
-  if (last.markup) problems.push("the last comment's text has elements in it");
-  if (me !== null && last.author !== me) problems.push("the last comment is by " + JSON.stringify(last.author) + ", expected " + JSON.stringify(me));
-  if (count !== null && now !== count + 1) problems.push("the count went from " + count + " to " + now);
+  const added = after.filter((c) => c.body === body && !before.some((b) => b.id === c.id));
+  if (added.length !== 1) return [...problems, added.length + " new comments read " + JSON.stringify(body.slice(0, 200))];
+  const comment = added[0]!;
+  if (comment.markup) problems.push("the comment's text has elements in it");
+  if (me !== null && comment.author !== me) problems.push("the comment is by " + JSON.stringify(comment.author) + ", expected " + JSON.stringify(me));
+  if (count !== null) {
+    if (after.at(-1)?.id !== comment.id) problems.push("the comment is not the last one");
+    if (now !== count + 1) problems.push("the count went from " + count + " to " + now);
+  }
   if (now !== after.length) problems.push("the count says " + now + ", but " + after.length + " comments are shown");
-  const same = (list: PageComment[]) => list.filter((c) => c.body === body).length;
-  if (before.length > 0 && same(after) !== same(before) + 1) problems.push(same(after) + " comments read so, and " + same(before) + " did before");
   if (!typed && field?.value !== "") problems.push("the field still holds " + JSON.stringify(field?.value?.slice(0, 200)));
   return problems;
 }
 
-function checkOpen(document: Document, postID: string, fresh: number, commenting: boolean): string[] {
+// checkOpen of a post's comments. Fresh is how many the count said were new, or null if that cannot be
+// compared.
+function checkOpen(document: Document, postID: string, fresh: number | null): string[] {
   const problems: string[] = [];
   const { count, fresh: still } = summary(document, postID);
   const shown = comments(document, postID);
   if (still !== 0) problems.push("the count still says " + still + " new");
   if (count !== shown.length) problems.push("the count says " + count + ", but " + shown.length + " comments are shown");
   const marked = shown.filter((c) => c.marked).length;
-  if (!commenting && marked !== fresh) problems.push("the count said " + fresh + " new, but " + marked + " comments are marked new");
+  if (fresh !== null && marked !== fresh) problems.push("the count said " + fresh + " new, but " + marked + " comments are marked new");
   return problems;
 }
 
 // ---- Rules that hold on every page ----
 
-// privacyProblems: someone not signed in sees that the group is private, and nothing of the group.
-// It also learns the names on pages for someone signed in, to look for them on the private page.
+// privacyProblems: someone not signed in gets the page that says the group is private at /, and that
+// page shows nothing of the group: no post, comment, or text someone wrote, and no name seen on a page
+// for someone signed in or on the preview's list of people. Names are matched as whole words, with
+// their case. It learns the names as it goes.
 export function privacyProblems(window: Window, document: Document): string[] {
   const signedIn = window.sessionStorage.getItem(signedInKey) === "1";
   const path = window.location.pathname;
@@ -439,10 +492,9 @@ export function ownNewProblems(document: Document): string[] {
   return problems;
 }
 
-const dayNumber = (date: string) => Date.UTC(+date.slice(0, 4), +date.slice(5, 7) - 1, +date.slice(8, 10)) / 86_400_000;
-
 // orderProblems: days are in order, newest first, each once, and so are the posts in a day.
 export function orderProblems(document: Document): string[] {
+  const dayNumber = (date: string) => Date.UTC(+date.slice(0, 4), +date.slice(5, 7) - 1, +date.slice(8, 10)) / 86_400_000;
   const problems: string[] = [];
   const sections = Array.from(document.querySelectorAll("#timeline section[data-day]"));
   const days = sections.map((s) => s.getAttribute("data-day") ?? "");

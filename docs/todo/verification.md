@@ -39,6 +39,6 @@ How we know regroup does what it should, given that Markus does not read the cod
 
 - What else has to be true before Markus says "production", beyond mutation testing, reviews by other models, and a security review.
 - How sign-in emails reach Markus on the preview.
-- Checks for the other promises in the core values. That no page asks another host for anything is checked by tests, and for the built stylesheet by the Docker build.
+- Checks for the other promises in the core values. That no page asks another host for anything is checked by tests, for the built stylesheet by the Docker build, and in the browser by bombadil.
 - When bombadil has run long enough without false alarms to become a merge gate.
 - How well hegel shrinks long stateful failures, and whether a failure can be replayed from its printed code.

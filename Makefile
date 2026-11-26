@@ -2,7 +2,6 @@
 
 APP_NAME ?= app
 DATABASE_PATH ?= app.db
-BOMBADIL_TIME_LIMIT ?= 3m
 
 .PHONY: benchmark
 benchmark:
@@ -14,7 +13,7 @@ benchmark:
 # and removes its database when it is done. docs/research/bombadil.md says how to read a failure.
 .PHONY: bombadil
 bombadil: tailwindcss
-	BOMBADIL_TIME_LIMIT=$(BOMBADIL_TIME_LIMIT) ./bombadil/run.sh
+	./bombadil/run.sh
 
 .PHONY: build-docker
 build-docker:

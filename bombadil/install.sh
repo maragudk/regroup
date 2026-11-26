@@ -48,7 +48,7 @@ mkdir -p "$root/bin"
 download="$(mktemp "$root/bin/bombadil.XXXXXX")"
 trap 'rm -f "$download"' EXIT
 echo "Downloading bombadil $version" >&2
-curl -fsSL -o "$download" "https://github.com/antithesishq/bombadil/releases/download/v$version/$asset"
+curl -fsSL --retry 3 -o "$download" "https://github.com/antithesishq/bombadil/releases/download/v$version/$asset"
 if [ "$(checksum "$download")" != "$sha256" ]; then
   echo "The download of bombadil $version does not have the checksum it should, so it is not used" >&2
   exit 1
