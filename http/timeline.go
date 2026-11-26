@@ -140,7 +140,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			Timeline:  timeline,
 			Composer:  html.ComposerProps{Days: firstDays(days), Token: token()},
 			Posts:     posts,
-			Earlier:   html.EarlierPostsProps{Next: timeline.Next, Days: lastDays(days)},
+			Earlier:   html.EarlierPostsProps{Next: timeline.Next, Days: lastDays(days), Posts: len(days) > 0},
 			Extra:     extra(true),
 		}), nil
 	})
@@ -205,12 +205,28 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		now := now()
 		day := model.GroupByDay([]model.TimelinePost{{Post: post, AuthorName: user.Name}}, group.TimeZone, now)[0]
 
+		// The same form can be sent again after the post is on the page, so the post is added only to a
+		// timeline that does not have it yet, which makes adding it idempotent. A page that has it
+		// already gets nothing more than the composer.
+		timeline := "#" + html.TimelineID + ":not(:has(#post-" + post.ID.String() + "))"
+
 		// The page said which days it has a heading for at its top. The post goes under the heading of
 		// its day if that is one of them.
 		if slices.Contains(days, day.Date) {
 			return nil, writePatches(props.W,
 				patch{elements: composer(days)},
-				patch{selector: "#" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts, posts)},
+				patch{selector: timeline + " #" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts, posts)},
+			)
+		}
+
+		// A post from a day older than the newest the page has heads its own day nowhere, since the
+		// heading would be above newer days. That is a form sent again some time after it first was, or
+		// a clock that went back. The post goes under the heading of its day if the page has that
+		// further down, and is not added otherwise.
+		if slices.ContainsFunc(days, func(d model.Date) bool { return d.Compare(day.Date) > 0 }) {
+			return nil, writePatches(props.W,
+				patch{elements: composer(days)},
+				patch{selector: timeline + " #" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts, posts)},
 			)
 		}
 
@@ -218,7 +234,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		// empty, and said so, the day takes the place of that.
 		patches := []patch{
 			{elements: composer(firstDays(append([]model.Date{day.Date}, days...)))},
-			{selector: "#" + html.TimelineID, mode: "prepend", elements: html.TimelineDay(day, now, posts)},
+			{selector: timeline, mode: "prepend", elements: html.TimelineDay(day, now, posts)},
 		}
 		if len(days) == 0 {
 			patches[1].mode = "inner"
@@ -292,7 +308,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			})})
 		}
 		patches = append(patches, patch{elements: Group{
-			html.EarlierPosts(html.EarlierPostsProps{Next: timeline.Next, Days: lastDays(known)}),
+			html.EarlierPosts(html.EarlierPostsProps{Next: timeline.Next, Days: lastDays(known), Posts: true}),
 			loaded(timeline),
 		}})
 

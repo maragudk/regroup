@@ -67,7 +67,7 @@ func GroupPage(props GroupPageProps) Node {
 					Span(Text("regroup")),
 					Span(Text(members)),
 					Div(Class("ml-auto flex min-w-0 items-baseline gap-x-5"),
-						Span(Class("min-w-0 font-serif text-lg/6 font-[640] wrap-anywhere"), Text(props.UserName)),
+						Span(Data("person", ""), Class("min-w-0 font-serif text-lg/6 font-[640] wrap-anywhere"), Text(props.UserName)),
 						Iff(props.Extra != nil, func() Node {
 							return Span(Class("shrink-0 [&_a]:underline [&_a]:decoration-stone-900/50 [&_a]:decoration-1 [&_a]:underline-offset-4 [&_a]:hover:decoration-stone-900"), props.Extra)
 						}),
@@ -93,13 +93,16 @@ func GroupPage(props GroupPageProps) Node {
 		Announcement("", ""),
 
 		// While a request from the page is on its way, the buttons of what sent it are off, so that the
-		// same thing cannot be sent twice. If it fails, this says so, until the next request starts.
+		// same thing cannot be sent twice. A button can be off for more than one request at a time, such
+		// as the button of a comment on its way while its post's comments open, so each button counts the
+		// requests it is off for, and comes on again only when the last of them has been answered. If a
+		// request fails, this says so, until the next request starts.
 		P(ID("request-failed"), Role("alert"),
-			Class("fixed inset-x-0 bottom-0 hidden bg-stone-900 px-5 py-3 text-center text-white"),
+			Class("fixed inset-x-0 bottom-0 hidden bg-stone-900 py-3 text-white"),
 			data.Signals(map[string]any{"_failed": false}),
-			data.On("datastar-fetch", `const type = evt.detail.type, buttons = evt.detail.el.querySelectorAll('button'); if (type === 'started') { $_failed = false; buttons.forEach(b => b.disabled = true) } else if (type === 'finished') { buttons.forEach(b => b.disabled = false) } else if (type === 'error' || type === 'retries-failed') { $_failed = true }`),
+			data.On("datastar-fetch", `const type = evt.detail.type, buttons = evt.detail.el.querySelectorAll('button'); if (type === 'started') { $_failed = false; buttons.forEach(b => { b.sending = (b.sending || 0) + 1; b.disabled = true }) } else if (type === 'finished') { buttons.forEach(b => { b.sending = Math.max((b.sending || 0) - 1, 0); b.disabled = b.sending > 0 }) } else if (type === 'error' || type === 'retries-failed') { $_failed = true }`),
 			data.Class("hidden", "!$_failed"),
-			Text("That did not go through. Try again, and reload the page if it keeps happening."),
+			Span(Class("block "+wrap), Text("That did not go through. Try again, and reload the page if it keeps happening.")),
 		),
 	)
 }
@@ -111,7 +114,7 @@ const wrap = "mx-auto w-full max-w-[1440px] px-5 sm:px-8 lg:px-[72px]"
 const (
 	sign      = "bg-primary-500 text-stone-900 [&_:focus-visible]:outline-stone-900"
 	signInner = wrap + " flex min-h-[104px] flex-col justify-between gap-3 pt-3 pb-5 lg:min-h-[152px] lg:gap-2 lg:pt-[18px] lg:pb-[30px]"
-	signName  = "font-serif text-[44px]/[0.9] font-[620] tracking-[-0.02em] text-balance wrap-anywhere lg:text-[96px]/[0.8]"
+	signName  = "font-serif text-[length:clamp(44px,13vw,96px)]/[0.9] font-[620] tracking-[-0.02em] text-balance wrap-anywhere lg:text-[96px]/[0.8]"
 )
 
 // postColumn is where the text of posts starts: beside the names in their margin column on a wide
@@ -205,7 +208,7 @@ func Composer(props ComposerProps) Node {
 		Input(Type("hidden"), Name("token"), Value(props.Token)),
 		Div(Class("flex items-end gap-2"),
 			Label(For(fieldID), Class("sr-only"), Text("Write to the group")),
-			textarea(fieldID, "Write to the group", "3", props.Body, props.Message != "", props.Message+props.Notice != "", "composer-message", "min-h-[52px] px-[22px] py-3", focus(props.Focus, props.Token)),
+			textarea(fieldID, "Write to the group", props.Body, props.Message != "", props.Message+props.Notice != "", "composer-message", "min-h-[52px] px-[22px] py-3", focus(props.Focus, props.Token)),
 			Button(Type("submit"),
 				Class("inline-flex h-[52px] shrink-0 cursor-pointer items-center rounded-full bg-primary-500 px-[22px] text-stone-900 hover:bg-primary-400 active:bg-primary-600 disabled:cursor-default disabled:opacity-60"),
 				Text("Post"),
@@ -224,11 +227,11 @@ func joinDays(days []model.Date) string {
 	return strings.Join(values, ",")
 }
 
-// textarea that grows with what is written in it, where the browser can do that, and is as many rows
-// tall as given where it cannot. It is described by the message with the given ID if it has one. The
-// given extra goes on it too.
-func textarea(id, placeholder, rows, value string, invalid, described bool, messageID, class string, extra Node) Node {
-	return Textarea(ID(id), Name("body"), Rows(rows), Placeholder(placeholder),
+// textarea that is one line tall, and grows with what is written in it: by itself where the browser
+// can size a field to its content, and by the app's script where it cannot. It is described by the
+// message with the given ID if it has one. The given extra goes on it too.
+func textarea(id, placeholder, value string, invalid, described bool, messageID, class string, extra Node) Node {
+	return Textarea(ID(id), Name("body"), Rows("1"), Placeholder(placeholder),
 		If(invalid, Aria("invalid", "true")),
 		If(described, Aria("describedby", messageID)),
 		extra,
@@ -295,6 +298,9 @@ func DayHeading(day model.TimelineDay, now time.Time) Node {
 		date = day.Date.Time().Format("Monday 2 January 2006")
 	}
 
+	// A heading is one word in the serif, with the rest in the sans beside it, so that it stays on one
+	// line on a phone. A date written out is all in the serif on a wider screen.
+	class := "mb-6 flex flex-wrap items-baseline gap-x-5 gap-y-2 font-serif text-[40px]/none font-[620] tracking-[-0.015em] lg:mb-7 lg:text-[64px]/none"
 	var heading Node
 	switch {
 	case day.Today:
@@ -302,13 +308,12 @@ func DayHeading(day model.TimelineDay, now time.Time) Node {
 	case day.Yesterday:
 		heading = Group{Text("Yesterday "), dayDate(date)}
 	default:
-		heading = Text(date)
+		weekday, rest, _ := strings.Cut(date, " ")
+		heading = Group{Text(weekday + " "), Span(Class("max-sm:font-sans max-sm:text-base/none max-sm:font-normal max-sm:tracking-normal max-sm:whitespace-nowrap max-sm:text-stone-600"), Text(rest))}
+		class += " sm:block"
 	}
 
-	return H2(ID("day-"+day.Date.String()+"-heading"),
-		Class("mb-6 flex flex-wrap items-baseline gap-x-5 gap-y-2 font-serif text-[40px]/none font-[620] tracking-[-0.015em] lg:mb-7 lg:text-[64px]/none"),
-		heading,
-	)
+	return H2(ID("day-"+day.Date.String()+"-heading"), Class(class), heading)
 }
 
 // dayDate written out beside "Today" or "Yesterday".
@@ -317,7 +322,7 @@ func dayDate(date string) Node {
 }
 
 // TimelinePosts as they are shown under their day's heading, with the given props. Each has a place for
-// its comments, which is empty until [Comments] fills it, and the form to add one.
+// its comments, which says they are loading until [Comments] fills it, and the form to add one.
 func TimelinePosts(posts []model.TimelinePost, props PostsProps) Node {
 	focus := props.Focus
 
@@ -331,16 +336,19 @@ func TimelinePosts(posts []model.TimelinePost, props PostsProps) Node {
 
 		// A post that takes the focus can have it, and takes it when it is on the page, unless the person
 		// put the focus somewhere while waiting, such as in a field: anywhere but on nothing, or on the
-		// control that loads earlier posts.
+		// control that loads earlier posts. It is a whole post, not a control, so it has no focus ring.
 		var takesFocus Node
+		class := "mb-9 grid grid-cols-1 gap-y-2 lg:grid-cols-[200px_608px] lg:items-baseline lg:gap-x-8"
 		if focus {
 			takesFocus = Group{TabIndex("-1"), data.Init("(document.activeElement === document.body || !!document.activeElement?.closest('#earlier')) && el.focus()")}
+			class += " outline-none"
 			focus = false
 		}
 
-		return Article(ID("post-"+id), Data("post", id), takesFocus, Class("mb-9 grid grid-cols-1 gap-y-2 lg:grid-cols-[200px_608px] lg:gap-x-8"),
+		// On a wide screen the name in the margin and the first line of the text share a baseline.
+		return Article(ID("post-"+id), Data("post", id), takesFocus, Class(class),
 			Div(Class("flex flex-wrap items-baseline gap-x-3 lg:block"),
-				H3(Class("font-serif text-[28px]/none font-[640] tracking-[-0.005em] wrap-anywhere text-primary-700 lg:text-[36px]/none"), Text(p.AuthorName)),
+				H3(Data("author", ""), Class("font-serif text-[28px]/none font-[640] tracking-[-0.005em] wrap-anywhere text-primary-700 lg:text-[36px]/none"), Text(p.AuthorName)),
 				Div(Class("flex items-baseline gap-x-3 text-[15px]/6 text-stone-600 lg:mt-2"),
 					Time(DateTime(p.Created.T.Format(time.RFC3339)), Class("tabular-nums"), Text(p.Created.T.Format("15:04"))),
 					If(p.New, newMark("new")),
@@ -351,16 +359,21 @@ func TimelinePosts(posts []model.TimelinePost, props PostsProps) Node {
 
 				// Opening the comments posts the small form below, found by this element's own ID. So
 				// the post's ID is in the body of the request, not in its URL, and not in the expression.
+				// Only one opening is on its way at a time: the first answer records that the reader
+				// opened the comments, so a second one sent meanwhile would come without the marks of
+				// what is new and replace the first before the reader saw them.
 				Details(ID("post-"+id+"-thread"), Class("mt-2"),
-					data.On("toggle", "el.open && @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'})"+sent),
-					Summary(Class("inline-flex cursor-pointer list-none rounded-sm text-[15px]/6 text-stone-600 hover:text-stone-900 [&::-webkit-details-marker]:hidden"),
+					data.On("toggle", "el.open && !el.opening && (el.opening = @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'})"+sent+".finally(() => el.opening = null))"),
+					// The summary is a line of small text, and its hit area reaches above and below it
+					// to be 44 pixels tall, without taking up more room.
+					Summary(Class("group relative inline-flex cursor-pointer list-none rounded-sm text-[15px]/6 text-stone-600 before:absolute before:inset-x-0 before:-top-2 before:-bottom-3 hover:text-stone-900 [&::-webkit-details-marker]:hidden"),
 						CommentsSummary(p.ID, p.Comments, p.NewComments),
 					),
 					Form(ID("post-"+id+"-thread-open"), Method("post"), Action("/comments/open"), Hidden(""),
 						Input(Type("hidden"), Name("post"), Value(id)),
 					),
 					Div(Class("mt-4 border-l border-stone-200 pl-5 lg:pl-6"),
-						Comments(CommentsProps{PostID: p.ID}),
+						Comments(CommentsProps{PostID: p.ID, Loading: true}),
 						CommentForm(CommentFormProps{PostID: p.ID, Token: token}),
 					),
 				),
@@ -390,7 +403,7 @@ func CommentsSummary(postID model.PostID, comments, newComments int) Node {
 	}
 
 	return Span(ID("post-"+postID.String()+"-comments-summary"), Class("inline-flex items-baseline gap-x-5"),
-		Span(Class("underline decoration-stone-400 decoration-1 underline-offset-4"), Text(label)),
+		Span(Class("underline decoration-stone-400 decoration-1 underline-offset-4 group-hover:decoration-stone-900"), Text(label)),
 		If(newComments > 0, newMark(fmt.Sprint(newComments, " new"))),
 	)
 }
@@ -404,11 +417,17 @@ type CommentsProps struct {
 
 	// Now in the group's time zone.
 	Now time.Time
+
+	// Loading, if true, is the place for the comments before they have come, which says that they are
+	// on their way. The form to add a comment, which comes after it, is hidden until they have come, so
+	// that the comments and the form show together.
+	Loading bool
 }
 
 // Comments of a post, in their place under it.
 func Comments(props CommentsProps) Node {
-	return Div(ID("post-"+props.PostID.String()+"-comments"),
+	return Div(ID("post-"+props.PostID.String()+"-comments"), Class("peer"),
+		If(props.Loading, Group{Data("loading", ""), P(Class("text-[15px]/6 text-stone-600"), Text("Loading comments"))}),
 		If(len(props.Comments) > 0,
 			Ol(Class("mb-5 grid gap-4 motion-safe:animate-fade-in"),
 				Map(props.Comments, func(c model.TimelineComment) Node {
@@ -416,7 +435,7 @@ func Comments(props CommentsProps) Node {
 
 					return Li(ID("comment-"+id), Data("comment", id),
 						P(Class("flex flex-wrap items-baseline gap-x-2.5"),
-							Span(Class("font-serif text-xl/7 font-[680] wrap-anywhere text-primary-700"), Text(c.AuthorName)),
+							Span(Data("author", ""), Class("font-serif text-xl/7 font-[680] wrap-anywhere text-primary-700"), Text(c.AuthorName)),
 							Span(Class("flex items-baseline gap-x-3 text-[15px]/6 text-stone-600"),
 								Time(DateTime(c.Created.T.Format(time.RFC3339)), Class("tabular-nums"), Text(commentTime(c.Created.T, props.Now))),
 								If(c.New, newMark("new")),
@@ -478,14 +497,14 @@ func CommentForm(props CommentFormProps) Node {
 	}
 	messageID := "post-" + id + "-comment-message"
 
-	return Form(ID("post-"+id+"-comment-form"), Method("post"), Action("/comments"),
+	return Form(ID("post-"+id+"-comment-form"), Method("post"), Action("/comments"), Class("peer-data-loading:hidden"),
 		data.On("submit", "@post('/comments', "+request+")"+sent),
 		Input(Type("hidden"), Name("post"), Value(id)),
 		Input(Type("hidden"), Name("field"), Value(props.Fresh)),
 		Input(Type("hidden"), Name("token"), Value(props.Token)),
 		Div(Class("flex items-end gap-2"),
 			Label(For(fieldID), Class("sr-only"), Text("Write a comment")),
-			textarea(fieldID, "Write a comment", "2", props.Body, props.Message != "", props.Message+props.Notice != "", messageID, "min-h-11 px-[18px] py-2", focus(props.Focus, props.Token)),
+			textarea(fieldID, "Write a comment", props.Body, props.Message != "", props.Message+props.Notice != "", messageID, "min-h-11 px-[18px] py-2", focus(props.Focus, props.Token)),
 			Button(Type("submit"), Class(secondaryButton+" h-11"), Text("Comment")),
 		),
 		message(messageID, cmp.Or(props.Message, props.Notice)),
@@ -493,7 +512,7 @@ func CommentForm(props CommentFormProps) Node {
 }
 
 // secondaryButton is every button but the one that posts.
-const secondaryButton = "inline-flex shrink-0 cursor-pointer items-center rounded-full border border-stone-400 px-[18px] text-stone-900 hover:border-stone-900 disabled:cursor-default disabled:opacity-60"
+const secondaryButton = "inline-flex shrink-0 cursor-pointer items-center rounded-full border border-stone-500 px-[18px] text-stone-900 hover:border-stone-900 disabled:cursor-default disabled:opacity-60"
 
 // EarlierPostsProps is the state of the control that loads earlier posts.
 type EarlierPostsProps struct {
@@ -503,18 +522,27 @@ type EarlierPostsProps struct {
 
 	// Days that the page has a heading for at its end, newest first. The form sends them along.
 	Days []model.Date
+
+	// Posts is whether the timeline above has any posts. If it has, and there is no page to load, the
+	// timeline ends with a line that says nothing was posted before.
+	Posts bool
 }
 
 // EarlierPosts is the control at the end of the timeline that loads the page after a cursor.
-// The cursor is posted, so that it is not in a URL.
+// The cursor is posted, so that it is not in a URL. While the page is on its way, the button says so.
 func EarlierPosts(props EarlierPostsProps) Node {
 	return Form(ID("earlier"), Method("post"), Action("/posts/earlier"), Class(postColumn+" mt-12"),
 		data.On("submit", "@post('/posts/earlier', "+request+")"+sent),
+		data.Indicator("_loadingEarlier"),
 		If(props.Next != "", Group{
 			Input(Type("hidden"), Name("after"), Value(props.Next)),
 			Input(Type("hidden"), Name("days"), Value(joinDays(props.Days))),
-			Button(Type("submit"), Class(secondaryButton+" h-11"), Text("Earlier posts")),
+			Button(Type("submit"), Class(secondaryButton+" h-11"),
+				data.Text("$_loadingEarlier ? 'Loading earlier posts' : 'Earlier posts'"),
+				Text("Earlier posts"),
+			),
 		}),
+		If(props.Next == "" && props.Posts, P(Class("text-stone-600"), Text("Nothing was posted before this."))),
 	)
 }
 

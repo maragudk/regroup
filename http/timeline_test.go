@@ -2,6 +2,7 @@ package http_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	cryptorand "crypto/rand"
 	"errors"
@@ -344,10 +345,10 @@ func TestTimeline_post(t *testing.T) {
 		is.Equal(t, "2031-03-14,2031-03-13", attr(one(t, composer, named("days")), "value"))
 		is.Equal(t, 0, len(all(composer, role("alert"))))
 
-		is.Equal(t, "#day-2031-03-14-posts", decoded[1].Selector)
+		article := one(t, patches[1], tag("article"))
+		is.Equal(t, "#day-2031-03-14-posts", placed(t, decoded[1], attr(article, "data-post")))
 		is.Equal(t, "prepend", decoded[1].Mode)
 		is.Equal(t, 0, len(all(patches[1], tag("h2"))))
-		article := one(t, patches[1], tag("article"))
 		is.Equal(t, "Signe", text(one(t, article, tag("h3"))))
 		is.Equal(t, "10:00", text(one(t, article, tag("time"))))
 		is.Equal(t, "Cake in the kitchen.\n\nIt is carrot.", text(one(t, article, hasAttr("data-body"))))
@@ -420,7 +421,7 @@ func TestTimeline_post(t *testing.T) {
 
 		decoded, patches := a.decode(t, res), a.patches(t, res)
 		is.Equal(t, 3, len(decoded))
-		is.Equal(t, "#timeline", decoded[1].Selector)
+		is.Equal(t, "#timeline", placed(t, decoded[1], attr(one(t, patches[1], tag("article")), "data-post")))
 		is.Equal(t, "prepend", decoded[1].Mode)
 		section := one(t, patches[1], tag("section"))
 		is.Equal(t, "Today Friday 14 March", text(one(t, section, tag("h2"))))
@@ -447,7 +448,7 @@ func TestTimeline_post(t *testing.T) {
 
 		decoded, patches := a.decode(t, res), a.patches(t, res)
 		is.Equal(t, 3, len(decoded))
-		is.Equal(t, "#timeline", decoded[1].Selector)
+		is.Equal(t, "#timeline", placed(t, decoded[1], attr(one(t, patches[1], tag("article")), "data-post")))
 		is.Equal(t, "prepend", decoded[1].Mode)
 		is.EqualSlice(t, []string{"Today Saturday 15 March"}, texts(all(patches[1], tag("h2"))))
 
@@ -485,7 +486,7 @@ func TestTimeline_post(t *testing.T) {
 
 		decoded, patches := a.decode(t, res), a.patches(t, res)
 		is.Equal(t, 2, len(decoded))
-		is.Equal(t, "#day-2010-11-06-posts", decoded[1].Selector)
+		is.Equal(t, "#day-2010-11-06-posts", placed(t, decoded[1], attr(one(t, patches[1], tag("article")), "data-post")))
 		is.Equal(t, "prepend", decoded[1].Mode)
 		is.Equal(t, 0, len(all(patches[1], tag("h2"))))
 		is.Equal(t, days, attr(one(t, patches[0], named("days")), "value"))
@@ -499,7 +500,7 @@ func TestTimeline_post(t *testing.T) {
 
 		decoded, patches := a.decode(t, res), a.patches(t, res)
 		is.Equal(t, 2, len(decoded))
-		is.Equal(t, "#timeline", decoded[1].Selector)
+		is.Equal(t, "#timeline", placed(t, decoded[1], attr(one(t, patches[1], tag("article")), "data-post")))
 		is.Equal(t, "inner", decoded[1].Mode)
 		is.Equal(t, "Today Friday 14 March", text(one(t, patches[1], tag("h2"))))
 		is.Equal(t, "Cake.", text(one(t, patches[1], hasAttr("data-body"))))
@@ -522,7 +523,7 @@ func TestTimeline_post(t *testing.T) {
 			decoded, patches := a.decode(t, res), a.patches(t, res)
 			is.Equal(t, expected, attr(one(t, patches[0], named("days")), "value"), days)
 			for _, d := range decoded {
-				is.True(t, regexp.MustCompile(`^(|#timeline|#day-\d{4}-\d{2}-\d{2}-posts)$`).MatchString(d.Selector), d.Selector)
+				is.True(t, patchSelector.MatchString(d.Selector), d.Selector)
 			}
 			for _, p := range patches {
 				for _, h := range all(p, tag("h2")) {
@@ -761,8 +762,8 @@ func TestTimeline_again(t *testing.T) {
 			tokens = append(tokens, token)
 
 			// What the first sending made is shown as the first time, without saying it was posted now.
-			is.Equal(t, "#day-2031-03-14-posts", decoded[1].Selector)
 			article := one(t, patches[1], tag("article"))
+			is.Equal(t, "#day-2031-03-14-posts", placed(t, decoded[1], attr(article, "data-post")))
 			is.Equal(t, post, attr(article, "data-post"))
 			is.Equal(t, "Cake.", text(one(t, article, hasAttr("data-body"))))
 			is.Equal(t, 0, len(all(patches[0], id("announcement"))))
@@ -884,6 +885,111 @@ func TestTimeline_again(t *testing.T) {
 		}
 		is.Equal(t, 1, a.count(t, "posts"))
 		is.Equal(t, 0, a.count(t, "comments"))
+	})
+
+	t.Run("adds a post sent again only to a page that does not have it yet, wherever on the page it would go", func(t *testing.T) {
+		for _, test := range []struct {
+			name   string
+			before time.Duration
+		}{
+			{name: "an empty timeline"},
+			{name: "a timeline with today at its top", before: time.Hour},
+			{name: "a timeline with an older day at its top", before: 48 * time.Hour},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				a := newApp(t)
+				signe := sqlitetest.CreateUser(t, a.db, "Signe")
+				thomas := sqlitetest.CreateUser(t, a.db, "Thomas")
+				if test.before > 0 {
+					a.createPost(t, thomas, base.Add(-test.before), "Earlier.")
+				}
+				cookie := a.signIn(t, signe)
+
+				// The page's composer is sent twice, as when a browser keeps a form's token over a reload.
+				doc := parse(t, a.get(t, cookie, "/").Body.String())
+				composer := one(t, doc, id("composer"))
+				form := url.Values{"body": {"Cake."}, "days": {attr(one(t, composer, named("days")), "value")}, "token": {attr(one(t, composer, named("token")), "value")}}
+				d := &historyDriver{t: t}
+				for range 2 {
+					res := a.post(t, cookie, "/posts", form, true)
+					is.Equal(t, http.StatusOK, res.Code)
+					d.apply(doc, a.decode(t, res))
+				}
+
+				posts := 1
+				if test.before > 0 {
+					posts = 2
+				}
+				is.Equal(t, posts, a.count(t, "posts"))
+				is.Equal(t, 1, len(all(doc, func(n *nethtml.Node) bool { return hasAttr("data-body")(n) && text(n) == "Cake." })))
+				d.checkDays(doc)
+			})
+		}
+	})
+
+	t.Run("never puts the heading of an older day above newer days for a post sent again, and adds it only under its day if the page does not have it", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		thomas := sqlitetest.CreateUser(t, a.db, "Thomas")
+		cookie := a.signIn(t, signe)
+
+		// Signe posts on Monday, and Thomas every day after it, up to today, Friday.
+		token := newToken(t)
+		a.clock.t = base.Add(-4 * 24 * time.Hour)
+		a.post(t, cookie, "/posts", url.Values{"body": {"Monday's."}, "token": {token}}, true)
+		for days := 3; days >= 0; days-- {
+			a.createPost(t, thomas, base.Add(-time.Duration(days)*24*time.Hour), "Thomas's.")
+		}
+		a.clock.t = base
+
+		doc := parse(t, a.get(t, cookie, "/").Body.String())
+		days := attr(one(t, one(t, doc, id("composer")), named("days")), "value")
+		is.Equal(t, "2031-03-14,2031-03-13,2031-03-12", days)
+
+		// The same form, kept over a reload, is sent again from a page that names only newer days.
+		res := a.post(t, cookie, "/posts", url.Values{"body": {"Monday's."}, "token": {token}, "days": {days}}, true)
+		decoded, patches := a.decode(t, res), a.patches(t, res)
+		is.Equal(t, 2, len(decoded))
+		for _, p := range patches {
+			is.Equal(t, 0, len(all(p, tag("h2"))))
+			is.Equal(t, 0, len(all(p, tag("section"))))
+		}
+		post := attr(one(t, patches[1], tag("article")), "data-post")
+		is.Equal(t, "#day-2031-03-10-posts", placed(t, decoded[1], post))
+		is.Equal(t, days, attr(one(t, patches[0], named("days")), "value"))
+
+		d := &historyDriver{t: t}
+		d.apply(doc, decoded)
+		is.Equal(t, 1, len(all(doc, id("post-"+post))))
+		is.EqualSlice(t, []string{"2031-03-14", "2031-03-13", "2031-03-12", "2031-03-11", "2031-03-10"}, attrs(all(doc, hasAttr("data-day")), "data-day"))
+
+		// A page that does not have the post's day, such as one that has not loaded it yet, gets nothing.
+		short := parse(t, a.get(t, cookie, "/").Body.String())
+		section := one(t, short, func(n *nethtml.Node) bool { return attr(n, "data-day") == "2031-03-10" })
+		section.Parent.RemoveChild(section)
+		d.apply(short, a.decode(t, a.post(t, cookie, "/posts", url.Values{"body": {"Monday's."}, "token": {token}, "days": {days}}, true)))
+		is.Equal(t, 0, len(all(short, id("post-"+post))))
+		is.Equal(t, 5, a.count(t, "posts"))
+	})
+
+	t.Run("adds a comment sent again only once to a page that has it", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
+		cookie := a.signIn(t, signe)
+
+		doc := parse(t, a.get(t, cookie, "/").Body.String())
+		d := &historyDriver{t: t}
+		d.apply(doc, a.decode(t, a.post(t, cookie, "/comments/open", url.Values{"post": {post.ID.String()}}, true)))
+		form := one(t, doc, id("post-"+post.ID.String()+"-comment-form"))
+		sent := url.Values{"post": {post.ID.String()}, "body": {"Yes."}, "token": {attr(one(t, form, named("token")), "value")}}
+		for range 2 {
+			d.apply(doc, a.decode(t, a.post(t, cookie, "/comments", sent, true)))
+		}
+
+		is.EqualSlice(t, []string{"Yes."}, texts(all(one(t, doc, id("post-"+post.ID.String()+"-comments")), hasAttr("data-body"))))
+		is.Equal(t, "1 comment", text(one(t, doc, id("post-"+post.ID.String()+"-comments-summary"))))
+		is.Equal(t, 1, a.count(t, "comments"))
 	})
 
 	t.Run("makes exactly one post or comment for each form, however often and in whatever order each is sent", func(t *testing.T) {
@@ -1154,6 +1260,34 @@ func TestTimeline_earlier(t *testing.T) {
 		is.Equal(t, "2031-03-03,2031-03-02,2031-03-01", attr(one(t, earlier, named("days")), "value"))
 	})
 
+	t.Run("ends the timeline with a line that says nothing was posted before, once there is nothing earlier, and an empty timeline without it", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		cookie := a.signIn(t, signe)
+
+		ended := func(n *nethtml.Node) bool { return text(n) == "Nothing was posted before this." }
+		is.Equal(t, 0, len(all(one(t, parse(t, a.get(t, cookie, "/").Body.String()), id("earlier")), ended)))
+
+		for i := range 21 {
+			a.createPost(t, signe, base.Add(-time.Duration(i)*time.Hour), fmt.Sprint("Post ", i))
+		}
+		earlier := one(t, parse(t, a.get(t, cookie, "/").Body.String()), id("earlier"))
+		is.Equal(t, 0, len(all(earlier, ended)))
+
+		patches := a.patches(t, a.post(t, cookie, "/posts/earlier", url.Values{"after": {attr(one(t, earlier, named("after")), "value")}}, true))
+		earlier = one(t, patches[len(patches)-1], id("earlier"))
+		is.Equal(t, 0, len(all(earlier, tag("button"))))
+		is.Equal(t, 1, len(all(earlier, ended)))
+
+		// A timeline that fits on its first page ends there.
+		b := newApp(t)
+		thomas := sqlitetest.CreateUser(t, b.db, "Thomas")
+		b.createPost(t, thomas, base.Add(-time.Hour), "Only.")
+		earlier = one(t, parse(t, b.get(t, b.signIn(t, thomas), "/").Body.String()), id("earlier"))
+		is.Equal(t, 0, len(all(earlier, tag("button"))))
+		is.Equal(t, 1, len(all(earlier, ended)))
+	})
+
 	t.Run("offers the page after the one it loaded while there is one", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
@@ -1260,7 +1394,9 @@ func TestTimeline_comments(t *testing.T) {
 
 		doc := parse(t, a.get(t, cookie, "/").Body.String())
 		is.Equal(t, "3 comments2 new", text(one(t, doc, id("post-"+post.ID.String()+"-comments-summary"))))
-		is.Equal(t, "", text(one(t, doc, id("post-"+post.ID.String()+"-comments"))))
+		// Until the comments come, their place says they are on their way.
+		is.Equal(t, "Loading comments", text(one(t, doc, id("post-"+post.ID.String()+"-comments"))))
+		is.Equal(t, 1, len(all(doc, func(n *nethtml.Node) bool { return attr(n, "id") == "post-"+post.ID.String()+"-comments" && slices.ContainsFunc(n.Attr, func(a nethtml.Attribute) bool { return a.Key == "data-loading" }) })))
 
 		// The field to add a comment is on the page from the start, under the post it is for.
 		form := one(t, one(t, doc, id("post-"+post.ID.String())), func(n *nethtml.Node) bool { return n.Data == "form" && attr(n, "action") == "/comments" })
@@ -1278,6 +1414,7 @@ func TestTimeline_comments(t *testing.T) {
 		is.Equal(t, "3 comments", text(one(t, patches[0], id("post-"+post.ID.String()+"-comments-summary"))))
 
 		comments := one(t, patches[0], id("post-"+post.ID.String()+"-comments"))
+		is.True(t, !slices.ContainsFunc(comments.Attr, func(a nethtml.Attribute) bool { return a.Key == "data-loading" }), "the comments still say they are loading")
 		items := all(comments, tag("li"))
 		is.Equal(t, 3, len(items))
 		is.EqualSlice(t, []string{"Have you tried descaling it?", "It was descaled\non Tuesday.", "They come Thursday."}, texts(all(comments, hasAttr("data-body"))))
@@ -2012,6 +2149,10 @@ type historyDriver struct {
 
 	// commentFields holds the field that each comment form on each person's page sends.
 	commentFields map[model.UserID]map[model.PostID]string
+
+	// pages holds each person's page in the browser, from their latest look, with the answers to what
+	// they posted, commented, and opened since applied to it.
+	pages map[model.UserID]*nethtml.Node
 }
 
 func (d *historyDriver) Reset(t testing.TB, zone *time.Location, now time.Time, pageSize int) {
@@ -2028,6 +2169,7 @@ func (d *historyDriver) Reset(t testing.TB, zone *time.Location, now time.Time, 
 	d.cookies = map[model.UserID]*http.Cookie{}
 	d.composers = map[model.UserID]url.Values{}
 	d.commentFields = map[model.UserID]map[model.PostID]string{}
+	d.pages = map[model.UserID]*nethtml.Node{}
 }
 
 func (d *historyDriver) Join(name string) model.UserID {
@@ -2065,6 +2207,7 @@ func (d *historyDriver) Look(actor model.UserID) timelinetest.PageAnswer {
 	composer := one(d.t, doc, id("composer"))
 	d.composers[actor] = url.Values{"days": {attr(one(d.t, composer, named("days")), "value")}, "field": {attr(one(d.t, composer, named("field")), "value")}}
 	d.commentFields[actor] = map[model.PostID]string{}
+	d.pages[actor] = doc
 
 	return timelinetest.PageAnswer{Page: page}
 }
@@ -2123,14 +2266,27 @@ func (d *historyDriver) Post(actor model.UserID, token, body string) timelinetes
 		if len(articles) == 0 {
 			continue
 		}
-		// The post goes under the heading of its day if the page named that day, and to the top of the
-		// timeline with a heading of its own if not.
-		selector := decoded[i+1].Selector
-		known := slices.Contains(strings.Split(composer.Get("days"), ","), strings.TrimSuffix(strings.TrimPrefix(selector, "#day-"), "-posts"))
-		if selector != "#"+html.TimelineID && !known {
-			d.t.Fatalf("the post was put in %v, which the page did not name", selector)
-		}
+		// The post goes only to a timeline that does not have it yet. It goes under the heading of its
+		// day if the page named that day, or if the day is older than one the page named, and to the top
+		// of the timeline with a heading of its own if not.
 		answer.Post = d.post(articles[0])
+		guard, place, ok := guarded(decoded[i+1].Selector)
+		if !ok || guard != answer.Post.ID.String() {
+			d.t.Fatalf("the post %v was put in %q, which does not leave a timeline that has it alone", answer.Post.ID, decoded[i+1].Selector)
+		}
+		if date, ok := strings.CutPrefix(place, "day-"); ok {
+			date = strings.TrimSuffix(date, "-posts")
+			named := strings.Split(composer.Get("days"), ",")
+			if !slices.Contains(named, date) && !slices.ContainsFunc(named, func(n string) bool { return n > date }) {
+				d.t.Fatalf("the post was put under the day %v, which is newer than every day the page named, %v", date, named)
+			}
+		}
+	}
+
+	// What the browser shows after the answer: no post twice, and the days in order.
+	if page := d.pages[actor]; page != nil {
+		d.apply(page, decoded)
+		d.checkDays(page)
 	}
 	return answer
 }
@@ -2158,6 +2314,7 @@ func (d *historyDriver) Comment(actor model.UserID, post model.PostID, token, bo
 	answer := timelinetest.CommentAnswer{Outcome: outcome, Field: &field}
 	if opened, comments, ok := d.comments(patch); ok {
 		answer.Opened, answer.OpenedPost, answer.Comments = true, opened, comments
+		d.applyToPost(actor, opened, d.a.decode(d.t, res))
 	}
 
 	// The answer to a comment made says so to screen readers, in an element named after the comment.
@@ -2181,7 +2338,19 @@ func (d *historyDriver) Open(actor model.UserID, post model.PostID) timelinetest
 	if !ok || opened != post {
 		d.t.Fatalf("opening the comments of %v opened %q", post, opened)
 	}
+	d.applyToPost(actor, post, d.a.decode(d.t, res))
 	return timelinetest.CommentsAnswer{Comments: comments}
+}
+
+// applyToPost the given patches about the given post's comments, to the given person's page, if it has
+// that post, and checks that the page has each comment once.
+func (d *historyDriver) applyToPost(actor model.UserID, post model.PostID, patches []apphttp.DecodedPatch) {
+	page := d.pages[actor]
+	if page == nil || len(all(page, id("post-"+post.String()))) == 0 {
+		return
+	}
+	d.apply(page, patches)
+	d.checkDays(page)
 }
 
 // refused is the outcome of an answer that is not patches, and whether it is one.
@@ -2366,7 +2535,21 @@ func (d *historyDriver) apply(doc *nethtml.Node, patches []apphttp.DecodedPatch)
 			continue
 		}
 
-		target := d.byID(doc, strings.TrimPrefix(p.Selector, "#"))
+		// A patch that adds a post applies only to a timeline that does not have the post yet. As in
+		// Datastar, a patch whose selector matches nothing changes nothing.
+		var target *nethtml.Node
+		if guard, place, ok := guarded(p.Selector); ok {
+			if len(all(d.byID(doc, html.TimelineID), id("post-"+guard))) > 0 {
+				continue
+			}
+			found := all(doc, id(place))
+			if len(found) == 0 {
+				continue
+			}
+			target = d.byID(doc, place)
+		} else {
+			target = d.byID(doc, strings.TrimPrefix(p.Selector, "#"))
+		}
 		switch p.Mode {
 		case "append":
 			for _, n := range nodes {
@@ -2389,6 +2572,45 @@ func (d *historyDriver) apply(doc *nethtml.Node, patches []apphttp.DecodedPatch)
 		}
 	}
 	d.checkIDs(doc)
+}
+
+// guarded selector of a patch that adds a post: the ID of the post it leaves a timeline that has alone,
+// the ID of the element it is aimed at, and whether the selector is one such.
+func guarded(selector string) (string, string, bool) {
+	match := guardedSelector.FindStringSubmatch(selector)
+	if match == nil {
+		return "", "", false
+	}
+	return match[1], cmp.Or(match[2], html.TimelineID), true
+}
+
+var guardedSelector = regexp.MustCompile(`^#timeline:not\(:has\(#post-([\w-]+)\)\)(?: #([\w-]+))?$`)
+
+// patchSelector is every selector a patch can have.
+var patchSelector = regexp.MustCompile(`^(|#timeline|#day-\d{4}-\d{2}-\d{2}-posts|#timeline:not\(:has\(#post-p_\w+\)\)(?: #day-\d{4}-\d{2}-\d{2}-posts)?)$`)
+
+// checkDays on the given page: the days are in order, newest first.
+func (d *historyDriver) checkDays(doc *nethtml.Node) {
+	var previous string
+	for _, n := range all(doc, hasAttr("data-day")) {
+		if day := attr(n, "data-day"); previous != "" && day >= previous {
+			d.t.Fatalf("the page has the day %v after the day %v", day, previous)
+		}
+		previous = attr(n, "data-day")
+	}
+}
+
+// placed is where a patch that adds the given post puts it: the selector of the place, without what
+// makes it apply only to a timeline that does not have the post yet. It fails the test if the patch
+// does not leave such a timeline alone.
+func placed(t testing.TB, p apphttp.DecodedPatch, postID string) string {
+	t.Helper()
+
+	guard, place, ok := guarded(p.Selector)
+	if !ok || guard != postID {
+		t.Fatalf("the patch that adds %v is aimed at %q, which does not leave a timeline that has it alone", postID, p.Selector)
+	}
+	return "#" + place
 }
 
 // byID finds the one element on the page with the given ID, or fails the test.
@@ -2447,7 +2669,7 @@ func FuzzTimeline(f *testing.F) {
 			is.Equal(t, 0, len(all(p, tag("script"))))
 		}
 		for _, d := range a.decode(t, res) {
-			is.True(t, regexp.MustCompile(`^(|#timeline|#day-\d{4}-\d{2}-\d{2}-posts)$`).MatchString(d.Selector), d.Selector)
+			is.True(t, patchSelector.MatchString(d.Selector), d.Selector)
 			is.True(t, slices.Contains([]string{"", "inner", "prepend"}, d.Mode), d.Mode)
 		}
 
@@ -2465,7 +2687,7 @@ func FuzzTimeline(f *testing.F) {
 		is.True(t, res.Code == http.StatusBadRequest || res.Code == http.StatusOK, fmt.Sprint(res.Code))
 		if res.Code == http.StatusOK {
 			for _, d := range a.decode(t, res) {
-				is.True(t, regexp.MustCompile(`^(|#timeline|#day-\d{4}-\d{2}-\d{2}-posts)$`).MatchString(d.Selector), d.Selector)
+				is.True(t, patchSelector.MatchString(d.Selector), d.Selector)
 			}
 		}
 
@@ -2499,7 +2721,7 @@ func FuzzTimeline(f *testing.F) {
 				is.Equal(t, 0, len(all(p, tag("script"))), path)
 			}
 			for _, d := range a.decode(t, res) {
-				is.True(t, regexp.MustCompile(`^(|#timeline|#day-\d{4}-\d{2}-\d{2}-posts)$`).MatchString(d.Selector), d.Selector)
+				is.True(t, patchSelector.MatchString(d.Selector), d.Selector)
 			}
 			// An answer about a comment is about the post the comment is on, whatever post was named.
 			if path == "/comments" {

@@ -44,7 +44,7 @@ func TestGroupPage(t *testing.T) {
 		is.True(t, !strings.Contains(page, "<a "), page)
 	})
 
-	t.Run("says that a request failed in a place that is hidden until one does, and turns the buttons of what is being sent off meanwhile", func(t *testing.T) {
+	t.Run("says that a request failed in a place that is hidden until one does, and turns the buttons of what is being sent off until its own request has been answered", func(t *testing.T) {
 		doc, err := nethtml.Parse(strings.NewReader(render(t, html.GroupPage(html.GroupPageProps{GroupName: "The Loft", Now: now}))))
 		is.NotError(t, err)
 
@@ -57,7 +57,11 @@ func TestGroupPage(t *testing.T) {
 
 			is.Equal(t, "p", n.Data)
 			is.Equal(t, "alert", attribute(n, "role"))
-			is.Equal(t, "That did not go through. Try again, and reload the page if it keeps happening.", n.FirstChild.Data)
+			// The words sit in the page's column, at its left edge.
+			is.Equal(t, "span", n.FirstChild.Data)
+			is.True(t, strings.Contains(attribute(n.FirstChild, "class"), "max-w-[1440px]"), attribute(n.FirstChild, "class"))
+			is.True(t, !strings.Contains(attribute(n, "class"), "text-center"), attribute(n, "class"))
+			is.Equal(t, "That did not go through. Try again, and reload the page if it keeps happening.", n.FirstChild.FirstChild.Data)
 
 			// Hidden from the start, and shown by the signal that the listener sets.
 			is.True(t, slices.Contains(strings.Fields(attribute(n, "class")), "hidden"), attribute(n, "class"))
@@ -66,8 +70,10 @@ func TestGroupPage(t *testing.T) {
 
 			listener := attribute(n, "data-on:datastar-fetch")
 			for _, part := range []string{
-				"if (type === 'started') { $_failed = false; buttons.forEach(b => b.disabled = true) }",
-				"else if (type === 'finished') { buttons.forEach(b => b.disabled = false) }",
+				// A button counts the requests it is off for, such as a comment on its way and the opening
+				// of its post's comments, and comes on again only when none of them is on its way.
+				"if (type === 'started') { $_failed = false; buttons.forEach(b => { b.sending = (b.sending || 0) + 1; b.disabled = true }) }",
+				"else if (type === 'finished') { buttons.forEach(b => { b.sending = Math.max((b.sending || 0) - 1, 0); b.disabled = b.sending > 0 }) }",
 				"else if (type === 'error' || type === 'retries-failed') { $_failed = true }",
 				"buttons = evt.detail.el.querySelectorAll('button')",
 			} {
@@ -125,7 +131,9 @@ func TestGroupPage(t *testing.T) {
 				is.Equal(t, "", attribute(n, "data-on:submit"))
 				is.Equal(t, "details", n.Parent.Data)
 				is.Equal(t, n.Parent.Attr[0].Val+"-open", attribute(n, "id"))
-				is.Equal(t, "el.open && @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'}).catch(() => $_failed = true)", attribute(n.Parent, "data-on:toggle"))
+				// Only one opening is on its way at a time, so that a second cannot use up the marks the
+				// first brings before the reader has seen them.
+				is.Equal(t, "el.open && !el.opening && (el.opening = @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'}).catch(() => $_failed = true).finally(() => el.opening = null))", attribute(n.Parent, "data-on:toggle"))
 				continue
 			}
 			// A request that cannot be sent at all fails with an error that would go unhandled. It is
@@ -133,6 +141,38 @@ func TestGroupPage(t *testing.T) {
 			is.Equal(t, "@post('"+attribute(n, "action")+"', {contentType: 'form', retryMaxCount: 0, requestCancellation: 'disabled'}).catch(() => $_failed = true)", attribute(n, "data-on:submit"))
 		}
 		is.EqualSlice(t, []string{"/posts", "/comments/open", "/comments", "/posts/earlier"}, forms)
+	})
+
+	t.Run("marks the name of the person the page is for, and the name of the author of every post and comment, for checks to find", func(t *testing.T) {
+		post := model.TimelinePost{Post: model.Post{ID: "p_1", Created: model.Time{T: now}, Body: "Cake"}, AuthorName: "Thomas"}
+		comment := model.TimelineComment{Comment: model.Comment{ID: "c_1", Created: model.Time{T: now}, PostID: "p_1", Body: "Yes"}, AuthorName: "Ada"}
+		doc, err := nethtml.Parse(strings.NewReader(render(t, Group{
+			html.GroupPage(html.GroupPageProps{
+				GroupName: "The Loft",
+				UserName:  "Signe",
+				Now:       now,
+				Timeline:  model.Timeline{Days: []model.TimelineDay{{Date: model.DateOf(now), Today: true, Posts: []model.TimelinePost{post}}}},
+			}),
+			html.Comments(html.CommentsProps{PostID: "p_1", Comments: []model.TimelineComment{comment}, Now: now}),
+		})))
+		is.NotError(t, err)
+
+		var people, authors []string
+		for n := range doc.Descendants() {
+			if n.Type != nethtml.ElementNode {
+				continue
+			}
+			for _, a := range n.Attr {
+				switch a.Key {
+				case "data-person":
+					people = append(people, n.FirstChild.Data)
+				case "data-author":
+					authors = append(authors, n.FirstChild.Data)
+				}
+			}
+		}
+		is.EqualSlice(t, []string{"Signe"}, people)
+		is.EqualSlice(t, []string{"Thomas", "Ada"}, authors)
 	})
 
 	t.Run("shows any body that can be posted, and any name, as exactly that text, wherever it comes out, and never as an element or an attribute", func(t *testing.T) {
@@ -230,6 +270,16 @@ func TestGroupPage(t *testing.T) {
 			}
 		})
 	})
+}
+
+// attributeOK of the given element with the given name, and whether it has one.
+func attributeOK(n *nethtml.Node, key string) (string, bool) {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return a.Val, true
+		}
+	}
+	return "", false
 }
 
 // attribute of the given element with the given name, or empty if it has none.
@@ -398,6 +448,34 @@ func TestTimelinePosts(t *testing.T) {
 		is.Equal(t, "(document.activeElement === document.body || !!document.activeElement?.closest('#earlier')) && el.focus()", attribute(articles[0], "data-init"))
 		is.Equal(t, "", attribute(articles[1], "tabindex"))
 		is.Equal(t, "", attribute(articles[1], "data-init"))
+
+		// The post that takes the focus is not outlined as a control would be.
+		is.True(t, slices.Contains(strings.Fields(attribute(articles[0], "class")), "outline-none"), attribute(articles[0], "class"))
+		is.True(t, !slices.Contains(strings.Fields(attribute(articles[1], "class")), "outline-none"), attribute(articles[1], "class"))
+	})
+
+	t.Run("says the comments are loading until they come, and hides the form to add one until then, so that the two show together", func(t *testing.T) {
+		doc, err := nethtml.Parse(strings.NewReader(render(t, html.TimelinePosts(posts[:1], html.PostsProps{}))))
+		is.NotError(t, err)
+
+		var comments, form *nethtml.Node
+		for n := range doc.Descendants() {
+			switch {
+			case n.Type != nethtml.ElementNode:
+			case attribute(n, "id") == "post-p_1-comments":
+				comments = n
+			case attribute(n, "id") == "post-p_1-comment-form":
+				form = n
+			}
+		}
+		is.True(t, comments != nil && form != nil)
+
+		_, loading := attributeOK(comments, "data-loading")
+		is.True(t, loading, "the place for the comments is not marked as loading")
+		is.Equal(t, "Loading comments", comments.FirstChild.FirstChild.Data)
+		is.True(t, slices.Contains(strings.Fields(attribute(comments, "class")), "peer"), attribute(comments, "class"))
+		is.True(t, form.PrevSibling == comments, "the form does not come right after the comments")
+		is.True(t, slices.Contains(strings.Fields(attribute(form, "class")), "peer-data-loading:hidden"), attribute(form, "class"))
 	})
 
 	t.Run("has no post take the focus otherwise", func(t *testing.T) {
@@ -430,6 +508,22 @@ func TestTimelineDay(t *testing.T) {
 
 			// The heading alone is the same heading.
 			is.True(t, strings.Contains(section, render(t, html.DayHeading(test.day, now))), section)
+
+			// The first word is in the serif, and the rest beside it in the sans on a phone, as the date
+			// beside Today and Yesterday is everywhere. A date written out is one line of serif on a wider
+			// screen.
+			rest := regexp.MustCompile(`^[^<]* <span class="([^"]*)">([^<]*)</span>$`).FindStringSubmatch(heading[1])
+			is.True(t, rest != nil, heading[1])
+			is.Equal(t, test.expected[strings.Index(test.expected, " ")+1:], rest[2])
+			class := strings.Fields(rest[1])
+			if test.day.Today || test.day.Yesterday {
+				is.True(t, slices.Contains(class, "font-sans"), rest[1])
+				return
+			}
+			for _, c := range []string{"max-sm:font-sans", "max-sm:text-stone-600", "max-sm:whitespace-nowrap"} {
+				is.True(t, slices.Contains(class, c), rest[1])
+			}
+			is.True(t, !slices.Contains(class, "font-sans"), rest[1])
 		})
 	}
 }
@@ -439,7 +533,7 @@ func TestComments(t *testing.T) {
 		list := render(t, html.Comments(html.CommentsProps{PostID: "p_1", Now: now, Comments: []model.TimelineComment{
 			{Comment: model.Comment{ID: "c_1", Created: model.Time{T: now}, Body: "Hello"}, AuthorName: "Signe"},
 		}}))
-		is.True(t, regexp.MustCompile(`<div id="post-p_1-comments"><ol class="[^"]*\bmotion-safe:animate-fade-in\b[^"]*">`).MatchString(list), list)
+		is.True(t, regexp.MustCompile(`<div id="post-p_1-comments" class="peer"><ol class="[^"]*\bmotion-safe:animate-fade-in\b[^"]*">`).MatchString(list), list)
 
 		// Nothing else on any page moves.
 		for _, path := range []string{"common.go", "group.go"} {
@@ -451,8 +545,8 @@ func TestComments(t *testing.T) {
 		}
 	})
 
-	t.Run("is an empty place when there are no comments", func(t *testing.T) {
-		is.Equal(t, `<div id="post-p_1-comments"></div>`, render(t, html.Comments(html.CommentsProps{PostID: "p_1", Now: now})))
+	t.Run("is an empty place when there are no comments, which no longer says they are loading", func(t *testing.T) {
+		is.Equal(t, `<div id="post-p_1-comments" class="peer"></div>`, render(t, html.Comments(html.CommentsProps{PostID: "p_1", Now: now})))
 	})
 
 	t.Run("shows the time of a comment alone when it is from today, and with its day when it is not", func(t *testing.T) {
@@ -486,5 +580,20 @@ func TestEarlierPosts(t *testing.T) {
 		form = render(t, html.EarlierPosts(html.EarlierPostsProps{Days: []model.Date{{Year: 2031, Month: 3, Day: 14}}}))
 		is.True(t, strings.Contains(form, `<form id="earlier"`), form)
 		is.True(t, !strings.Contains(form, "<button") && !strings.Contains(form, "<input"), form)
+	})
+
+	t.Run("says on its button that earlier posts are loading while they are on their way", func(t *testing.T) {
+		form := render(t, html.EarlierPosts(html.EarlierPostsProps{Next: "abc", Posts: true}))
+		is.True(t, strings.Contains(form, ` data-indicator="_loadingEarlier"`), form)
+		is.True(t, regexp.MustCompile(`<button type="submit"[^>]* data-text="\$_loadingEarlier \? &#39;Loading earlier posts&#39; : &#39;Earlier posts&#39;"[^>]*>Earlier posts</button>`).MatchString(form), form)
+		is.True(t, !strings.Contains(form, "Nothing was posted before this."), form)
+	})
+
+	t.Run("ends a timeline that has posts with a line that says nothing was posted before, and an empty one with nothing", func(t *testing.T) {
+		form := render(t, html.EarlierPosts(html.EarlierPostsProps{Posts: true}))
+		is.True(t, regexp.MustCompile(`<p class="text-stone-600">Nothing was posted before this\.</p></form>$`).MatchString(form), form)
+
+		form = render(t, html.EarlierPosts(html.EarlierPostsProps{}))
+		is.True(t, !strings.Contains(form, "Nothing was posted"), form)
 	})
 }
