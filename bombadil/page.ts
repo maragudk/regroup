@@ -421,14 +421,18 @@ export function privacyProblems(window: Window, document: Document): string[] {
   return problems;
 }
 
-// ownNewProblems: nothing a person wrote carries a "new" mark for them.
+// ownNewProblems: nothing a person wrote carries a "new" mark for them. The names are found by the page's
+// structure, so a name that cannot be found is a problem too, rather than a check that quietly passes.
 export function ownNewProblems(document: Document): string[] {
+  if (!isGroupPage(document)) return [];
   const me = personName(document);
-  if (me === null) return [];
+  if (!me) return ["the name of the person signed in is not where the checks look for it"];
   const problems: string[] = [];
   for (const p of posts(document)) {
+    if (!p.author) problems.push("the author of post " + p.id + " is not where the checks look for it");
     if (p.author === me && p.marked) problems.push("post " + p.id + " by " + me + " is marked new for them");
     for (const c of comments(document, p.id)) {
+      if (!c.author) problems.push("the author of comment " + c.id + " is not where the checks look for it");
       if (c.author === me && c.marked) problems.push("comment " + c.id + " by " + me + " is marked new for them");
     }
   }

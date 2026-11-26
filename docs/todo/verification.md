@@ -32,14 +32,13 @@ How we know regroup does what it should, given that Markus does not read the cod
 ## Not built yet
 
 - The preview instance. Its made-up office group and its one way to sign in as anyone are built behind the `preview` build tag (`make preview`).
-- The nightly workflow.
-- A pinned bombadil, its checks, and a CI job that starts the app and keeps the trace.
-- What bombadil still needs from the app: a seeded database with one person per role, and stable markers on moderation notes. Posts, comments, days, and the "new" mark have stable markers, and a failed Datastar request shows the message in `#request-failed`. They are listed in step 3 of `docs/diary/2026-11-26-first-group-page.md`.
+- Longer nightly runs of the stateful hegel tests and of fuzzing. Bombadil's nightly run is built (`.github/workflows/bombadil.yml`).
+- What bombadil still needs from the app: a seeded database with one person per role, stable markers on moderation notes, and stable markers on the name of the person signed in and on the names of authors, which `bombadil/page.ts` finds by the page's structure for now. Posts, comments, days, and the "new" mark have stable markers, and a failed Datastar request shows the message in `#request-failed`. They are listed in step 3 of `docs/diary/2026-11-26-first-group-page.md`.
 
 ## Open
 
 - What else has to be true before Markus says "production", beyond mutation testing, reviews by other models, and a security review.
 - How sign-in emails reach Markus on the preview.
 - Checks for the other promises in the core values. That no page asks another host for anything is checked by tests, and for the built stylesheet by the Docker build.
-- How well bombadil explores a real timeline. The trial only had a placeholder page.
+- When bombadil has run long enough without false alarms to become a merge gate.
 - How well hegel shrinks long stateful failures, and whether a failure can be replayed from its printed code.
