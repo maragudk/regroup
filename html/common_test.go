@@ -19,6 +19,19 @@ func TestPage(t *testing.T) {
 		is.True(t, strings.Contains(tag, `type="module"`), "Datastar script tag is not a module: "+tag)
 	})
 
+	t.Run("loads every script from a path on the app's own origin, and has no inline scripts", func(t *testing.T) {
+		page := render(t)
+		srcs := regexp.MustCompile(`<script[^>]*\ssrc="([^"]*)"`).FindAllStringSubmatch(page, -1)
+
+		is.True(t, len(srcs) > 0, "no script tags with a src found")
+		is.Equal(t, strings.Count(page, "<script"), len(srcs), "number of script tags compared to script tags with a src")
+		for _, src := range srcs {
+			path := src[1]
+			is.True(t, strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "//") && !strings.HasPrefix(path, `/\`),
+				"script src is not an absolute path on the app's own origin: "+path)
+		}
+	})
+
 	t.Run("renders the Datastar smoke test attribute, with the expression HTML-escaped", func(t *testing.T) {
 		want := `data-init="console.log(&#39;Datastar loaded&#39;)"`
 

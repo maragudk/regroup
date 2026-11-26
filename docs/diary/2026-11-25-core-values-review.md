@@ -125,3 +125,73 @@ Run `shasum -a 256 docs/core-values.md`. It should print `0bc95ef271f042b8290639
 ### Future work
 
 None from this step.
+
+## Step 3: Take Fathom analytics out of the software
+
+**Author:** builder
+
+### Prompt Context
+
+**Verbatim prompt:** (Task 2 of the lead's brief) "Requirements:
+- No page served by the app loads the Fathom script or any other third-party analytics.
+- The content security policy no longer allows the Fathom origin in any directive. Tighten it only by removing what Fathom needed; do not otherwise redesign the CSP.
+- Remove anything that existed only to serve Fathom: config, env vars (check `.env.example`, `cmd/`, Dockerfile, Makefile, workflows), helper code, tests or test expectations. If a dependency in `go.mod` becomes unused, tidy it.
+- Do not remove or change OpenTelemetry tracing, logging, or email code. Markus explicitly decided those are out of scope.
+- No new telemetry is needed for this change."
+**Interpretation:** Delete the Fathom script tag and the Fathom origin from the CSP, leave every other directive exactly as it was, and look for any config or dependency that existed only for Fathom.
+**Inferred intent:** Make the code match the new Privacy value ("It contains no visitor analytics"), and add tests so analytics cannot quietly come back.
+
+### What I did
+
+A case-insensitive search for "fathom" found only two places outside `/docs/diary/`. One was the script tag in `html.Page` (`/html/common.go`), which also carried the placeholder site ID `data-site="123"`. The other was `https://cdn.usefathom.com` in the `connect-src`, `img-src` and `script-src` directives in `http.CSP` (`/http/csp.go`). Fathom had no config, env vars, Dockerfile, Makefile or workflow entries, and no Go dependency, so `go mod tidy` changed nothing.
+
+I wrote the tests first. A new subtest in `/html/common_test.go` checks that every `<script>` on the page loads from a path on the app's own origin. The new `/http/csp_test.go` runs `http.CSP` through the real `httph.ContentSecurityPolicy` middleware for all four flag combinations. It checks that every source in every directive is one of `'self'`, `'none'`, `'unsafe-inline'` and `'unsafe-eval'`, and pins the full default policy. Both tests failed on the old code, naming `https://cdn.usefathom.com`.
+
+Then I deleted the script tag, along with the `opts.ConnectSrc` and `opts.ImgSrc` assignments, and changed `script-src` to start at `'self'`. httph v0.3.7 already defaults `connect-src` and `img-src` to `'self'` (`httph.go:196-204` in the module cache), so dropping the two assignments gives exactly the old values minus Fathom. The tests now pin those values, so a change in httph's defaults would show up.
+
+To check in the running app, I started it with `make watch`. The "Starting server" line gave `http://localhost:26774`. `curl` on the home page returned 200 with two script tags, `/scripts/datastar.<hash>.js` and `/scripts/app.<hash>.js`, and this header:
+
+`Content-Security-Policy: default-src 'none'; connect-src 'self'; font-src 'self'; img-src 'self'; manifest-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'`
+
+The `'unsafe-inline'` comes from `CSP_ALLOW_UNSAFE_INLINE=true` in `/.env.example`, the local development setting. The only absolute URL in the HTML is the footer link to `https://www.maragu.dev`, which is a link, not something the page loads. I stopped the app afterwards.
+
+`make test` and `make lint` (`golangci-lint run`, which is what CI's reusable lint workflow runs) both pass.
+
+### Why
+
+The new Privacy value says the software contains no visitor analytics. A test guards that sentence far better than a one-line deletion does.
+
+### What worked
+
+Testing the CSP through the real middleware instead of poking at the options struct. That way the tests see httph's defaults too, and assert on the header a browser actually receives.
+
+After the review fixes, I put the Fathom tag and origins back temporarily (restored from a scratch copy afterwards) and confirmed that both test files fail with messages naming `https://cdn.usefathom.com`.
+
+### What didn't work
+
+The worktree had no `.env`. Without it, `SERVER_ADDRESS_LOCAL` is false and the app would not use this checkout's own port, so I created `/.env` from `/.env.example` (it is gitignored) before `make watch`.
+
+### What I learned
+
+httph's CSP middleware builds a strict default policy and lets the options function overwrite it. A directive the app sets explicitly to the default value is redundant, but deleting it hands control to the library's default, which is why the tests pin the values.
+
+### What was tricky
+
+Self-review (two competing reviewers through the code-review skill) found no problem with the production change, but agreed on four gaps in my first version of the tests, and I fixed all of them:
+
+- `default-src 'none'` was never asserted. With it gone, `frame-src`, `object-src` and the others would allow everything, and the tests would still pass.
+- The `style-src` half of `http.CSP` had no assertions.
+- The assertions were substring matches that depended on the order httph prints directives in (`"script-src 'self';"` only matched because `script-src` is not last). The tests now parse the header into a map and compare exact values.
+- "Every source starts with a quote" let `'strict-dynamic'` and nonces through. That is now an exact list of allowed sources.
+
+Both also noted that the HTML test only looked at script tags with a `src`, so an inline loader snippet, the form most analytics vendors hand out, would pass. The test now also requires every `<script>` to have a `src`, and it rejects the `/\` prefix, which browsers treat as `//`. I left one suggestion from both reviewers alone: also checking `<img>`, `<iframe>` and `<link rel="preconnect">` for other origins. That reaches beyond scripts, and the CSP already blocks the first two.
+
+### What warrants review
+
+- `/http/csp.go`: the diff should only delete Fathom.
+- `/http/csp_test.go`: the allowed-source list and the pinned default policy.
+- To check by hand, run `make watch`, `curl -sI` the URL from the "Starting server" line in `/app.log`, and compare the `Content-Security-Policy` header with the one above.
+
+### Future work
+
+- The HTML test checks scripts only. If pages ever gain images or iframes from other origins, the CSP will block them, but a page-level test would give a clearer failure.
