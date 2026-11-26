@@ -1,4 +1,5 @@
 /*.log
+/.bombadil/
 /.claude/worktrees/
 /.env
 /.env*.local

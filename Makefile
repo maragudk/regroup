@@ -7,6 +7,14 @@ DATABASE_PATH ?= app.db
 benchmark:
 	go test -tags sqlite_fts5,sqlite_math_functions -bench . ./...
 
+# Explores the group page of a fresh preview build in a real browser with bombadil, checking the rules
+# in bombadil/spec.ts, for three minutes. Set BOMBADIL_TIME_LIMIT for a longer run, as in
+# make bombadil BOMBADIL_TIME_LIMIT=30m. It keeps the trace and the logs in .bombadil/, and stops the app
+# and removes its database when it is done. docs/research/bombadil.md says how to read a failure.
+.PHONY: bombadil
+bombadil: tailwindcss
+	./bombadil/run.sh
+
 .PHONY: build-docker
 build-docker:
 	docker build --platform linux/arm64 -t $(APP_NAME) .

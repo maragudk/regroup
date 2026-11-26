@@ -133,3 +133,58 @@ Adopt Bombadil as a supplementary, browser-level check, not as a replacement for
 2. When sign-in and the group page exist: add the seed data, the test-only sign-in, and stable hooks, and write a specification per role with regroup's product rules as properties. Run it in CI on `main` or nightly with a time limit of a few minutes, uploading traces, and make it a required check only once it has run without false alarms for a while.
 
 Limits of this recommendation. The trial ran against a placeholder page with almost nothing to explore, so it says nothing yet about how well Bombadil explores a real timeline with forms and Datastar updates, how flaky it is there, or how long useful runs must be. The tool is young, releases often, and breaks compatibility between minor versions, so the version should be pinned. I did not run it in GitHub Actions, try `inspect`, `shrink`, `fuzz`, or `chrome-headless-shell`, or confirm how Datastar reports a failed request in the browser console.
+
+## Running it, and reading a failure
+
+Added after the trial above, once the checks, `make bombadil`, and the workflow were built. Bombadil is pinned at version 0.8.0.
+
+Where things are. The specification is `bombadil/spec.ts`: the product's rules as checks, and the actions Bombadil explores with. `bombadil/page.ts` holds what the checks read from the page and what they keep in the browser between states. There are no roles yet, so every check holds for whoever is signed in, and for someone who is not.
+
+Running it locally:
+
+```
+make bombadil
+make bombadil BOMBADIL_TIME_LIMIT=30m
+```
+
+The first command builds the preview build, starts it on a free port with a fresh database that it seeds, explores for three minutes, then stops the app and removes the database and the build. The second explores for thirty minutes. The comment at the top of `bombadil/run.sh` lists the other settings, among them `BOMBADIL_OUTPUT` (where the trace and the logs are kept), `BOMBADIL_ARGS` (more arguments for Bombadil, such as `--width 390 --height 844` for a phone), and `BOMBADIL_SPEC` (another specification to check).
+
+`bombadil/install.sh` pins version 0.8.0 by checksum. If neither `bin/` nor the `PATH` has that exact build, it downloads it into `bin/`. Bombadil needs Chrome or Chromium installed.
+
+The run stops at the first broken rule. `bombadil/run.sh` exits with Bombadil's code: 0 if no rule broke, 2 if one did, and 1 if the run itself failed. `make` exits with 2 after either failure and shows the script's code as `Error 1` or `Error 2`.
+
+In CI. The `Bombadil` workflow (`.github/workflows/bombadil.yml`) explores for three minutes on a desktop screen on every pull request to `main`. Every night on `main`, and when started by hand, it explores for twenty minutes on a desktop screen and ten on a phone screen. It is not a merge gate yet: a broken rule shows as a failed `Bombadil` check on the pull request and leaves the jobs of the `CI` workflow alone. Every run keeps its logs for 14 days as the run's `bombadil-logs` artifact. A failed run also keeps its traces, as the `bombadil` artifact, since a trace takes about 30 MB a minute. On `main`, a failure opens an issue labelled `bombadil`, or comments on the one already open, with the broken rule, the values that broke it, and the commands that fetch the trace.
+
+Reading a failure. `run.sh` prints the last 60 lines of Bombadil's log, then the paths of what it kept, then one line saying how the run ended. It keeps these in `.bombadil/`, which git ignores:
+
+- `<time>.trace`: every state, with its screenshot. The time is when the run started, in UTC. A three-minute run's trace is about 100 MB, and nothing deletes old ones.
+- `<time>-bombadil.log`: every action Bombadil took, and what broke.
+- `<time>-app.log`: the app's log.
+- `violated.txt`: the names of the rules that broke, one per line. It is absent when none broke.
+
+Near its end, Bombadil's log names the rule, as `<name> was violated:`, and shows the extracted values that broke it. For most rules these are a list of problems in plain language, such as `post p_… by Oskar is marked new for them` or `the count says 2, but 1 comments are shown`. The lines before it are the actions Bombadil took, each with its time:
+
+```
+00:01.842 Clicking <a> (x: 907.6, y: 31.0, content: "Switch person")
+00:01.982 Clicking <button> (x: 100.7, y: 615.0, content: "Thomas")
+```
+
+They are the steps to try by hand on the preview.
+
+Two commands show more. `bombadil browser inspect <trace>` opens a viewer with a screenshot of every state. `bombadil trace <trace>` lists the states in the terminal, each with its action and URL, and marks the failing one with `violated:`. `./bombadil/install.sh` prints the path of the pinned build to run them with.
+
+Bombadil also prints a command that reproduces the run, but it seldom works here. It needs the same app on the same port with the same data, and `run.sh` has already stopped the app and removed its database. A fresh preview seeds its posts with new random IDs, so a replay parts from the original at the first action that names one, such as a comment on a seeded post. Going through the actions by hand on a fresh preview usually suffices.
+
+What to do with a finding. A real fault in the app is fixed with a Go test that fails first, as the Testing rules in `AGENTS.md` require. A false alarm is fixed in the check.
+
+What the checks cannot see:
+
+- Whether another person's marks change when someone writes. One browser is one person at a time.
+- Whether a post that someone else wrote since the reader's previous look is marked new. The page does not show when that look was.
+- Whether days are grouped in the group's time zone. The checks see only that each post's local date, read with the offset of its time, matches its day.
+- Whether what was posted survives a reload.
+- Anything about roles, which do not exist yet.
+- What a page for someone not signed in shows, other than the one at `/` that says the group is private.
+- Counts on a page that the browser restored from its back/forward cache, which can be out of date, and counts while two requests about the same post are on their way. The checks leave those comparisons out.
+
+The name of the person signed in, and the name of each author, have no stable marker yet, so `page.ts` finds them by the page's structure. A change to the page's layout can therefore break the checks that use those names with no fault in the app. They then fail with "is not where the checks look for it", rather than passing quietly.
