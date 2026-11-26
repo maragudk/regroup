@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	gluehttp "maragu.dev/glue/http"
 	"maragu.dev/is"
 
 	apphttp "app/http"
@@ -187,6 +188,33 @@ func TestPeople_signInLink(t *testing.T) {
 }
 
 func TestPeople_session(t *testing.T) {
+	t.Run("starts a new session on signing in, which keeps nothing from the one before, and ends the one before", func(t *testing.T) {
+		a := newApp(t)
+		sqlitetest.CreatePerson(t, a.db, "Signe", "signe@example.com", model.RoleMember)
+		thomas := sqlitetest.CreatePerson(t, a.db, "Thomas", "thomas@example.com", model.RoleMember)
+
+		// Thomas is signed in on this browser, and his session holds something of his.
+		ctx, err := a.sm.Load(t.Context(), "")
+		is.NotError(t, err)
+		a.sm.Put(ctx, gluehttp.SessionUserIDKey, thomas.ID.String())
+		a.sm.Put(ctx, "draft", "Thomas's draft")
+		value, _, err := a.sm.Commit(ctx)
+		is.NotError(t, err)
+		before := &http.Cookie{Name: a.sm.Cookie.Name, Value: value}
+		is.Equal(t, "Thomas", a.whoIsSignedIn(t, before))
+
+		res := a.post(t, before, "/sign-in/link", url.Values{"token": {a.link(t, "signe@example.com")}}, false)
+		is.Equal(t, http.StatusSeeOther, res.Code)
+		after := a.sessionCookie(res)
+		is.True(t, after != nil && after.Value != before.Value, "expected a new session")
+		is.Equal(t, "Signe", a.whoIsSignedIn(t, after))
+		is.Equal(t, "", a.whoIsSignedIn(t, before))
+
+		ctx, err = a.sm.Load(t.Context(), after.Value)
+		is.NotError(t, err)
+		is.Equal(t, "", a.sm.GetString(ctx, "draft"))
+	})
+
 	t.Run("ends the session of someone made inactive on their next request", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreatePerson(t, a.db, "Signe", "signe@example.com", model.RoleMember)

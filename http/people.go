@@ -69,7 +69,8 @@ func people(r *Router, log *slog.Logger, svc peopleService) {
 		_, err := svc.CheckInvitation(props.Ctx, props.R.URL.Query().Get("token"))
 		switch {
 		case errors.Is(err, model.ErrorLinkInvalid):
-			return plain(props.W, http.StatusBadRequest, invitationRefusal)
+			// The one answer to an invitation that does not work, whatever the reason.
+			return plain(props.W, http.StatusBadRequest, "This invitation does not work. Ask the person who invited you for a new one.")
 		case err != nil:
 			log.ErrorContext(props.Ctx, "Error checking an invitation", "error", err)
 			return html.ErrorPage(props), err
@@ -80,19 +81,14 @@ func people(r *Router, log *slog.Logger, svc peopleService) {
 	r.Post("/invitation", func(props html.PageProps) (Node, error) {
 		u, err := svc.AcceptInvitation(props.Ctx, props.R.PostFormValue("token"), props.R.PostFormValue("name"))
 		if errors.Is(err, model.ErrorLinkInvalid) {
-			return plain(props.W, http.StatusBadRequest, invitationRefusal)
+			return plain(props.W, http.StatusBadRequest, "This invitation does not work. Ask the person who invited you for a new one.")
 		}
 		return signedIn(props, log, r.SM, u, err)
 	})
 }
 
-const (
-	// linkRefusal is the one answer to a sign-in link that does not work, whatever the reason.
-	linkRefusal = "This link does not work. Ask for a new one."
-
-	// invitationRefusal is the one answer to an invitation that does not work, whatever the reason.
-	invitationRefusal = "This invitation does not work. Ask the person who invited you for a new one."
-)
+// linkRefusal is the one answer to a sign-in link that does not work, whatever the reason.
+const linkRefusal = "This link does not work. Ask for a new one."
 
 // signedIn answers signing in, or accepting an invitation, with the given outcome: on success, the
 // session is the user's, and the browser goes to the group page.
@@ -116,11 +112,13 @@ func signedIn(props html.PageProps, log *slog.Logger, sm *scs.SessionManager, u 
 	return nil, nil
 }
 
-// SignInSession of the request in the given context as the given user: the session gets a new token, so
-// that a session from before cannot be taken over, and holds the user's ID where glue's authentication
-// middleware reads it. Every request after that checks that the user is still active, and ends the
-// session if they are not.
+// SignInSession of the request in the given context as the given user: the session starts afresh with a
+// new token and nothing from before in it, so that a session from before cannot be taken over and keeps
+// nothing of whoever had it, and it holds the user's ID under [gluehttp.SessionUserIDKey].
 func SignInSession(ctx context.Context, sm *scs.SessionManager, id model.UserID) error {
+	if err := sm.Clear(ctx); err != nil {
+		return err
+	}
 	if err := sm.RenewToken(ctx); err != nil {
 		return err
 	}

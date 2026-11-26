@@ -20,13 +20,14 @@ type Job struct {
 	Data []byte
 }
 
-// message is how the queue's job runner encodes a job, by name and message, with gob.
+// message of a job on the queue, as [jobs.Create] encodes it, with gob. If that encoding changes, every
+// test that takes or runs jobs fails to decode them.
 type message struct {
 	Name    string
 	Message []byte
 }
 
-// envelope is how glue wraps a job's data with its trace context.
+// envelope of a job's data with its trace context, as [jobs.Create] wraps it.
 type envelope struct {
 	Body         jsontext.Value
 	TraceContext map[string]string

@@ -10,6 +10,7 @@ import (
 	. "maragu.dev/gomponents/html"
 
 	"app/html"
+	apphttp "app/http"
 	"app/model"
 	"app/sqlite"
 )
@@ -64,10 +65,9 @@ func Routes(r *gluehttp.Router, log *slog.Logger, db *sqlite.Database, outbox *O
 			return html.ErrorPage(props), err
 		}
 
-		if err := r.SM.RenewToken(props.Ctx); err != nil {
+		if err := apphttp.SignInSession(props.Ctx, r.SM, id); err != nil {
 			return html.ErrorPage(props), err
 		}
-		r.SM.Put(props.Ctx, gluehttp.SessionUserIDKey, id.String())
 
 		log.InfoContext(props.Ctx, "Signed in for the preview", "userID", id)
 

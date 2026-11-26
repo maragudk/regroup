@@ -9,7 +9,9 @@ alter table users add column role text not null default 'member' check ( role in
 
 -- invited_by is who invited the person. It is null for the first admin, who was named in the
 -- configuration, and for people who were there before invitations.
-alter table users add column invited_by text references users (id);
+alter table users add column invited_by text references users (id) on delete set null;
+
+create index users_invited_by_idx on users (invited_by);
 
 update users set role = 'admin' where id in (select user_id from users_roles where role = 'admin');
 
@@ -22,7 +24,8 @@ drop table users_roles;
 drop table roles;
 drop table tokens;
 
--- sign_in_links holds every sign-in link sent in the last day, by the hash of its token. A link belongs
+-- sign_in_links holds the sign-in links made in the last day or so, by the hash of its token, until the
+-- next link is made. A link belongs
 -- to an address, not to a person, so that the first admin can have one before they exist. used is when
 -- it was used up, by signing in with it or with another link to the same address.
 create table sign_in_links (

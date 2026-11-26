@@ -12,16 +12,6 @@ import (
 	"app/model"
 )
 
-// GetUserByEmail address, as [model.ParseEmailAddress] returns it. Returns [model.ErrorUserNotFound] if
-// there is no such user, active or not.
-func (d *Database) GetUserByEmail(ctx context.Context, email model.EmailAddress) (model.User, error) {
-	var u model.User
-	if err := userByEmail(ctx, d.H, &u, email); err != nil {
-		return model.User{}, err
-	}
-	return u, nil
-}
-
 func userByEmail(ctx context.Context, q querier, u *model.User, email model.EmailAddress) error {
 	if err := q.Get(ctx, u, `select * from users where email = ?`, email); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -92,21 +82,19 @@ func (d *Database) DeleteSignInLink(ctx context.Context, hash string) error {
 //
 // Anything else, including a link that was never made, is [model.ErrorLinkInvalid].
 func (d *Database) CheckSignInLink(ctx context.Context, hash string, now model.Time, firstAdmin model.EmailAddress) (model.SignInLinkCheck, error) {
-	var check model.SignInLinkCheck
-	err := d.H.InTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		var l model.SignInLink
-		if err := tx.Get(ctx, &l, `select * from sign_in_links where hash = ? and used is null and expires > ?`, hash, now); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return model.ErrorLinkInvalid
-			}
-			return err
+	var l model.SignInLink
+	if err := d.H.Get(ctx, &l, `select * from sign_in_links where hash = ? and used is null and expires > ?`, hash, now); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.SignInLinkCheck{}, model.ErrorLinkInvalid
 		}
+		return model.SignInLinkCheck{}, err
+	}
 
-		_, joining, err := signInTarget(ctx, tx, l.Email, firstAdmin)
-		check.Joining = joining
-		return err
-	})
-	return check, err
+	_, joining, err := signInTarget(ctx, d.H, l.Email, firstAdmin)
+	if err != nil {
+		return model.SignInLinkCheck{}, err
+	}
+	return model.SignInLinkCheck{Joining: joining}, nil
 }
 
 // SignIn with the link with the given hash, at the given time: by the rules of [Database.CheckSignInLink],
@@ -208,7 +196,8 @@ func insertUser(ctx context.Context, tx *sql.Tx, into *model.User, u model.User)
 
 // CreateInvitation to the address it names, from the person it names, with the times it has, and create
 // the job that sends it, in one transaction. It replaces the invitation that is waiting for the same
-// address, if there is one, which then no longer works.
+// address, if there is one, which then no longer works. Invitations that have expired by its time are
+// deleted.
 //
 // Returns [model.ErrorAlreadyMember] if the address is an active person's, and [model.ErrorFormerMember]
 // if it is the address of a person who is no longer active.
@@ -226,7 +215,7 @@ func (d *Database) CreateInvitation(ctx context.Context, inv model.Invitation) (
 			return err
 		}
 
-		if err := tx.Exec(ctx, `delete from invitations where email = ?`, inv.Email); err != nil {
+		if err := tx.Exec(ctx, `delete from invitations where email = ? or expires <= ?`, inv.Email, inv.Created); err != nil {
 			return err
 		}
 
@@ -266,9 +255,8 @@ func invitationByID(ctx context.Context, q querier, inv *model.Invitation, id mo
 	return nil
 }
 
-// SetInvitationHash of the invitation with the given ID, which is the hash of the token of the link that
-// is about to be sent in it, if it is still waiting and has not expired at the given time. A link sent
-// for it before stops working. Returns [model.ErrorInvitationNotFound] if there is no such invitation.
+// SetInvitationHash of the invitation with the given ID, which is the hash of the token of its link, if it
+// is still waiting and has not expired at the given time. The token of a hash set before no longer works. Returns [model.ErrorInvitationNotFound] if there is no such invitation.
 func (d *Database) SetInvitationHash(ctx context.Context, id model.InvitationID, hash string, now model.Time) (model.Invitation, error) {
 	var inv model.Invitation
 	err := d.H.InTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
@@ -312,11 +300,11 @@ func (d *Database) GetInvitations(ctx context.Context, now model.Time) ([]model.
 	return invs, nil
 }
 
-// DeleteInvitation with the given ID, so that it no longer works. Returns [model.ErrorInvitationNotFound]
-// if there is no such invitation.
-func (d *Database) DeleteInvitation(ctx context.Context, id model.InvitationID) error {
+// DeleteInvitation with the given ID, if it is waiting and has not expired at the given time, so that it no
+// longer works. Returns [model.ErrorInvitationNotFound] if there is no such invitation.
+func (d *Database) DeleteInvitation(ctx context.Context, id model.InvitationID, now model.Time) error {
 	var found model.InvitationID
-	if err := d.H.Get(ctx, &found, `delete from invitations where id = ? returning id`, id); err != nil {
+	if err := d.H.Get(ctx, &found, `delete from invitations where id = ? and expires > ? returning id`, id, now); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.ErrorInvitationNotFound
 		}
@@ -367,8 +355,8 @@ func (d *Database) AcceptInvitation(ctx context.Context, hash string, now model.
 
 // ChangeRole of the target to the given role, as the actor, if the given check of the two, as they are
 // in the same transaction, returns nil, and return the role the target had before. The target is nil if
-// there is no such person. Returns what the check returns otherwise, and [model.ErrorUserNotFound] if
-// there is no such actor.
+// there is no such person. Returns what the check returns otherwise, [model.ErrorUserNotFound] if there
+// is no such actor, and [model.ErrorMemberNotFound] if there is no such target and the check passes.
 func (d *Database) ChangeRole(ctx context.Context, actor, target model.UserID, role model.Role, check func(actor model.User, target *model.User) error) (model.Role, error) {
 	var before model.Role
 	err := d.H.InTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
@@ -390,6 +378,9 @@ func (d *Database) ChangeRole(ctx context.Context, actor, target model.UserID, r
 
 		if err := check(a, t); err != nil {
 			return err
+		}
+		if t == nil {
+			return model.ErrorMemberNotFound
 		}
 
 		before = t.Role

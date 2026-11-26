@@ -78,7 +78,8 @@ func NewFat(opts NewFatOptions) *Fat {
 //
 // The clock and the randomness are passed in, so that no operation reads the time or makes a secret
 // directly. The randomness must be safe for concurrent use, as [crypto/rand.Reader] is. The first admin
-// is the address the configuration names, or empty if it names none.
+// is the address of the person who may join as the first admin while the group has nobody in it, or
+// empty if nobody may.
 func Setup(f *Fat, bucket *s3.Bucket, db *sqlite.Database, sender email.Sender, now func() time.Time, random io.Reader, group model.Group, firstAdmin model.EmailAddress) {
 	AcceptInvitation(f, db, now)
 	ChangeRole(f, db)
@@ -97,7 +98,7 @@ func Setup(f *Fat, bucket *s3.Bucket, db *sqlite.Database, sender email.Sender, 
 	SendInvitation(f, db, sender, now, random, group)
 	SendSignInLink(f, db, sender, now, random, group, firstAdmin)
 	SignIn(f, db, now, firstAdmin)
-	WithdrawInvitation(f, db)
+	WithdrawInvitation(f, db, now)
 }
 
 // userGetter is the store a user is read from.

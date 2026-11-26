@@ -13,7 +13,7 @@ type emailSender interface {
 }
 
 type RegisterOpts struct {
-	// Emails is what sends the app's emails, such as the business logic.
+	// Emails is what sends the app's emails.
 	Emails emailSender
 }
 

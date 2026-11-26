@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -136,6 +137,7 @@ func TestFat_SendSignInLink(t *testing.T) {
 		is.Equal(t, model.EmailAddress("signe@example.com"), e.To)
 		is.Equal(t, "Signe", e.ToName)
 		is.Equal(t, "The Loft", e.Keywords["group"])
+		is.Equal(t, "15 minutes", e.Keywords["lifetime"])
 
 		token, err := model.ParseLinkToken(e.Keywords["token"])
 		is.NotError(t, err)
@@ -330,6 +332,7 @@ func TestFat_Invite(t *testing.T) {
 		is.Equal(t, "", e.ToName)
 		is.Equal(t, "Signe", e.Keywords["inviter"])
 		is.Equal(t, "The Loft", e.Keywords["group"])
+		is.Equal(t, "7 days", e.Keywords["lifetime"])
 
 		check, err := p.fat.CheckInvitation(t.Context(), e.Keywords["token"])
 		is.NotError(t, err)
@@ -600,11 +603,99 @@ func TestFat_ChangeRole(t *testing.T) {
 		sqlitetest.DeactivateUser(t, p.db, karen.ID)
 
 		is.Error(t, model.ErrorRoleInvalid, p.fat.ChangeRole(t.Context(), markus.ID, signe.ID, "owner"))
+		// Someone who may not change the role is told that, whatever the role.
+		is.Error(t, model.ErrorNotAllowed, p.fat.ChangeRole(t.Context(), signe.ID, markus.ID, "owner"))
+		is.Error(t, model.ErrorUserNotFound, p.fat.ChangeRole(t.Context(), "u_nope", signe.ID, "owner"))
 		is.Error(t, model.ErrorUserInactive, p.fat.ChangeRole(t.Context(), karen.ID, signe.ID, "admin"))
 		is.Error(t, model.ErrorMemberNotFound, p.fat.ChangeRole(t.Context(), markus.ID, karen.ID, "member"))
 		is.Error(t, model.ErrorMemberNotFound, p.fat.ChangeRole(t.Context(), markus.ID, "u_nope", "member"))
 		is.Error(t, model.ErrorUserNotFound, p.fat.ChangeRole(t.Context(), "u_nope", signe.ID, "admin"))
 	})
+}
+
+func TestFat_people_concurrency(t *testing.T) {
+	// Each of these is many tries at once at what may happen only once.
+	t.Run("signs in once with a link used many times at once", func(t *testing.T) {
+		p := newPeople(t, "", nil)
+		p.person(t, "Signe", model.RoleMember)
+		token := p.link(t, "signe@example.com")
+
+		is.Equal(t, 1, successes(16, func() error {
+			_, err := p.fat.SignIn(t.Context(), token, "")
+			return err
+		}))
+	})
+
+	t.Run("has the first admin join once with two links used at once", func(t *testing.T) {
+		p := newPeople(t, "markus@example.com", nil)
+		tokens := []string{p.link(t, "markus@example.com"), p.link(t, "markus@example.com")}
+
+		is.Equal(t, 1, successes(2, func(i int) func() error {
+			return func() error {
+				_, err := p.fat.SignIn(t.Context(), tokens[i], "Markus")
+				return err
+			}
+		}))
+		is.Equal(t, 1, count(t, p.db, "users"))
+	})
+
+	t.Run("makes one member of an invitation accepted many times at once", func(t *testing.T) {
+		p := newPeople(t, "", nil)
+		signe := p.person(t, "Signe", model.RoleModerator)
+		_, token := p.invite(t, signe, "amira@example.com")
+
+		is.Equal(t, 1, successes(16, func() error {
+			_, err := p.fat.AcceptInvitation(t.Context(), token, "Amira")
+			return err
+		}))
+		is.Equal(t, 2, count(t, p.db, "users"))
+	})
+
+	t.Run("leaves an admin when two admins take each other's role away at once", func(t *testing.T) {
+		p := newPeople(t, "", nil)
+		markus := p.person(t, "Markus", model.RoleAdmin)
+		signe := p.person(t, "Signe", model.RoleAdmin)
+
+		for range 10 {
+			is.NotError(t, p.db.H.Exec(t.Context(), "update users set role = 'admin'"))
+			pairs := [][2]model.UserID{{markus.ID, signe.ID}, {signe.ID, markus.ID}}
+			is.Equal(t, 1, successes(2, func(i int) func() error {
+				return func() error { return p.fat.ChangeRole(t.Context(), pairs[i][0], pairs[i][1], "member") }
+			}))
+			is.Equal(t, 1, count(t, p.db, "users where role = 'admin'"))
+		}
+	})
+}
+
+// successes of the given function, run the given number of times at once, which is either a function
+// that may fail with an error from the business domain, or one that gives such a function for each run.
+func successes[F func() error | func(int) func() error](n int, f F) int {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var ok int
+	for i := range n {
+		var run func() error
+		switch f := any(f).(type) {
+		case func() error:
+			run = f
+		case func(int) func() error:
+			run = f(i)
+		}
+		wg.Go(func() {
+			err := run()
+			var domainErr model.Error
+			if err != nil && !errors.As(err, &domainErr) {
+				panic(err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if err == nil {
+				ok++
+			}
+		})
+	}
+	wg.Wait()
+	return ok
 }
 
 func TestFat_people_telemetry(t *testing.T) {

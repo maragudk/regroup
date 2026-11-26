@@ -15,14 +15,12 @@ const (
 )
 
 // SendSignInLinkJobData is the address someone asked for a sign-in link with, as [ParseEmailAddress]
-// returned it. Whether the address gets one is decided when the job runs, so that asking looks the same
-// whatever the answer.
+// returned it, whether or not the address gets one.
 type SendSignInLinkJobData struct {
 	Email EmailAddress
 }
 
-// SendInvitationJobData is the invitation to send. Its link is made when the job runs, so that the link's
-// token is never stored.
+// SendInvitationJobData is the invitation to send, without its link, whose token is a secret.
 type SendInvitationJobData struct {
 	InvitationID InvitationID
 }

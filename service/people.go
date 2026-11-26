@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -74,7 +75,7 @@ type signInLinkSender interface {
 }
 
 // SendSignInLink wires [Fat.SendSignInLink] to the given store, sender, clock, and randomness, for the
-// given group, and the given address of the first admin, which is empty if the configuration names none.
+// given group, and the given address of the first admin, which is empty if there is none.
 // The randomness must be safe for concurrent use, as [crypto/rand.Reader] is.
 //
 // Panics if the operation is already wired.
@@ -121,8 +122,8 @@ func SendSignInLink(f *Fat, db signInLinkSender, sender emailSender, now func() 
 		}
 
 		err = sender.SendTransactional(ctx, email.SendOptions{
-			Keywords:  model.Keywords{"token": token.String(), "group": group.Name},
-			Preheader: "Your link to sign in to " + group.Name + ". It works once, for the next 15 minutes.",
+			Keywords:  model.Keywords{"token": token.String(), "group": group.Name, "lifetime": lifetime(model.SignInLinkLifetime)},
+			Preheader: "Your link to sign in to " + group.Name + ". It works once, for the next " + lifetime(model.SignInLinkLifetime) + ".",
 			Subject:   "Sign in to " + group.Name,
 			Template:  "sign-in",
 			To:        address,
@@ -287,7 +288,8 @@ func (f *Fat) SignIn(ctx context.Context, token, name string) (model.User, error
 	return u, err
 }
 
-// inviter is the store an invitation is made in.
+// inviter is the store an invitation is made in, together with the job of
+// [model.JobNameSendInvitation] that sends it.
 type inviter interface {
 	userGetter
 	CreateInvitation(ctx context.Context, inv model.Invitation) (model.Invitation, error)
@@ -386,8 +388,8 @@ func SendInvitation(f *Fat, db invitationSender, sender emailSender, now func() 
 		}
 
 		err = sender.SendTransactional(ctx, email.SendOptions{
-			Keywords:  model.Keywords{"token": token.String(), "group": group.Name, "inviter": inv.InvitedByName},
-			Preheader: inv.InvitedByName + " has invited you to join " + group.Name + ". The link works for 7 days.",
+			Keywords:  model.Keywords{"token": token.String(), "group": group.Name, "inviter": inv.InvitedByName, "lifetime": lifetime(model.InvitationLifetime)},
+			Preheader: inv.InvitedByName + " has invited you to join " + group.Name + ". The link works for " + lifetime(model.InvitationLifetime) + ".",
 			Subject:   inv.InvitedByName + " invited you to " + group.Name,
 			Template:  "invitation",
 			To:        inv.Email,
@@ -462,13 +464,13 @@ func (f *Fat) GetInvitations(ctx context.Context, actor model.UserID) ([]model.I
 // invitationWithdrawer is the store an invitation is withdrawn in.
 type invitationWithdrawer interface {
 	userGetter
-	DeleteInvitation(ctx context.Context, id model.InvitationID) error
+	DeleteInvitation(ctx context.Context, id model.InvitationID, now model.Time) error
 }
 
-// WithdrawInvitation wires [Fat.WithdrawInvitation] to the given store.
+// WithdrawInvitation wires [Fat.WithdrawInvitation] to the given store and clock.
 //
 // Panics if the operation is already wired.
-func WithdrawInvitation(f *Fat, db invitationWithdrawer) {
+func WithdrawInvitation(f *Fat, db invitationWithdrawer, now func() time.Time) {
 	if f.withdrawInvitation != nil {
 		panic("service: WithdrawInvitation already wired")
 	}
@@ -478,7 +480,7 @@ func WithdrawInvitation(f *Fat, db invitationWithdrawer) {
 			return err
 		}
 
-		if err := db.DeleteInvitation(ctx, id); err != nil {
+		if err := db.DeleteInvitation(ctx, id, model.Time{T: now()}); err != nil {
 			return err
 		}
 
@@ -490,7 +492,7 @@ func WithdrawInvitation(f *Fat, db invitationWithdrawer) {
 
 // WithdrawInvitation with the given ID, as the acting user, who must be active and may withdraw it by
 // [model.Allowed], so that its link no longer works. Returns [model.ErrorInvitationNotFound] if there is
-// no such invitation.
+// no such invitation, or it has expired.
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
 func (f *Fat) WithdrawInvitation(ctx context.Context, actor model.UserID, id model.InvitationID) error {
@@ -678,7 +680,8 @@ func (f *Fat) ListMembers(ctx context.Context, actor model.UserID) ([]model.Memb
 	return members, err
 }
 
-// roleChanger is the store a role is changed in.
+// roleChanger is the store a role is changed in. It runs the check on the actor and the target in the
+// same transaction as the change, as they are there.
 type roleChanger interface {
 	ChangeRole(ctx context.Context, actor, target model.UserID, role model.Role, check func(actor model.User, target *model.User) error) (model.Role, error)
 }
@@ -692,13 +695,11 @@ func ChangeRole(f *Fat, db roleChanger) {
 	}
 
 	f.changeRole = func(ctx context.Context, actor, target model.UserID, role string) error {
-		r, err := model.ParseRole(role)
-		if err != nil {
-			return err
-		}
+		// A role that is not one is refused only to someone who may change the target's role.
+		r, roleErr := model.ParseRole(role)
 
-		// The check runs in the store's transaction, on the actor and the target as they are there, so
-		// that two admins changing each other's roles at once cannot leave the group without one.
+		// Two admins changing each other's roles at once cannot leave the group without one, since the
+		// check sees the actor as they are when the role changes.
 		before, err := db.ChangeRole(ctx, actor, target, r, func(a model.User, t *model.User) error {
 			if !a.Active {
 				return model.ErrorUserInactive
@@ -713,7 +714,7 @@ func ChangeRole(f *Fat, db roleChanger) {
 			if t == nil || !t.Active {
 				return model.ErrorMemberNotFound
 			}
-			return nil
+			return roleErr
 		})
 		if err != nil {
 			return err
@@ -733,9 +734,9 @@ func ChangeRole(f *Fat, db roleChanger) {
 // user, who must be active and may change the target's role by [model.Allowed]: an admin, and not the
 // target. So nobody changes their own role, and the group always has an admin.
 //
-// A role that is not one is [model.ErrorRoleInvalid]. An actor who may not is [model.ErrorNotAllowed],
-// [model.ErrorUserInactive], or [model.ErrorUserNotFound], and a target who is not an active member is
-// [model.ErrorMemberNotFound].
+// An actor who may not is [model.ErrorNotAllowed], [model.ErrorUserInactive], or
+// [model.ErrorUserNotFound], whatever the target and the role. Then a target who is not an active member
+// is [model.ErrorMemberNotFound], and a role that is not one is [model.ErrorRoleInvalid].
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
 func (f *Fat) ChangeRole(ctx context.Context, actor, target model.UserID, role string) error {
@@ -749,4 +750,19 @@ func (f *Fat) ChangeRole(ctx context.Context, actor, target model.UserID, role s
 	err := f.changeRole(ctx, actor, target, role)
 	recordError(span, err)
 	return err
+}
+
+// lifetime of a link in words, in whole days, hours, or minutes, such as "15 minutes" or "7 days".
+func lifetime(d time.Duration) string {
+	n, unit := int(d/time.Minute), "minute"
+	switch {
+	case d%(24*time.Hour) == 0:
+		n, unit = int(d/(24*time.Hour)), "day"
+	case d%time.Hour == 0:
+		n, unit = int(d/time.Hour), "hour"
+	}
+	if n != 1 {
+		unit += "s"
+	}
+	return fmt.Sprint(n, " ", unit)
 }

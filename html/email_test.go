@@ -53,7 +53,7 @@ func send(t *testing.T, opts email.SendOptions) sent {
 func TestEmailTemplates(t *testing.T) {
 	t.Run("sends a sign-in email naming the group, with a button and an address that lead to the link, in words a person can follow", func(t *testing.T) {
 		got := send(t, email.SendOptions{
-			Keywords: model.Keywords{"token": "abc-_123", "group": "The Loft"},
+			Keywords: model.Keywords{"token": "abc-_123", "group": "The Loft", "lifetime": "15 minutes"},
 			Subject:  "Sign in to The Loft",
 			Template: "sign-in",
 			To:       "signe@example.com",
@@ -71,7 +71,7 @@ func TestEmailTemplates(t *testing.T) {
 
 	t.Run("sends an invitation naming who invited and the group, with a button and an address that lead to the invitation", func(t *testing.T) {
 		got := send(t, email.SendOptions{
-			Keywords: model.Keywords{"token": "abc", "group": "The Loft", "inviter": "Signe"},
+			Keywords: model.Keywords{"token": "abc", "group": "The Loft", "inviter": "Signe", "lifetime": "7 days"},
 			Subject:  "Signe invited you to The Loft",
 			Template: "invitation",
 			To:       "amira@example.com",
