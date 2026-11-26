@@ -454,12 +454,24 @@ func (m *machine) RuleDeactivate(tc hegel.TestCase) {
 	p.active = false
 }
 
-// RuleAdvanceClock moves the clock on, by nothing at all up to a week.
+// RuleAdvanceClock moves the clock on, by nothing at all up to eight days: by a step that is often at an
+// edge, such as a day, or by any number of milliseconds.
 func (m *machine) RuleAdvanceClock(tc hegel.TestCase) {
 	defer catch(tc)
 
-	d := hegel.Draw(tc, hegel.SampledFrom([]time.Duration{0, time.Millisecond, time.Second, time.Minute, time.Hour, 5 * time.Hour, 23 * time.Hour, 24 * time.Hour, 25 * time.Hour, 7 * 24 * time.Hour}))
+	d := hegel.Draw(tc, hegel.OneOf(
+		hegel.SampledFrom([]time.Duration{0, time.Millisecond, time.Second, time.Minute, time.Hour, 5 * time.Hour, 23 * time.Hour, 24 * time.Hour, 25 * time.Hour, 7 * 24 * time.Hour}),
+		temporal.Durations().Min(0).Max(8*24*time.Hour).Precision(temporal.PrecisionMilliseconds),
+	))
 	m.setClock(tc, m.now.Add(d))
+}
+
+// RuleSetClockBack sets the clock back a little, as when a host's clock is corrected.
+func (m *machine) RuleSetClockBack(tc hegel.TestCase) {
+	defer catch(tc)
+
+	d := hegel.Draw(tc, temporal.Durations().Min(time.Millisecond).Max(2*time.Hour).Precision(temporal.PrecisionMilliseconds))
+	m.setClock(tc, m.now.Add(-d))
 }
 
 // RuleToMidnight moves the clock to just before, at, or just after the next midnight in the group's time
@@ -897,9 +909,13 @@ func (m *machine) open(tc hegel.TestCase, p *person, target int, opened model.Po
 		tc.Errorf("the comments of %v were opened, not of %v", opened, m.posts[target].id)
 	}
 
+	// Comments are oldest first, by the time they were written, and in the order they were made when two
+	// have the same time.
 	since := max(p.joined, p.opened[target])
+	ordered := slices.Clone(m.posts[target].comments)
+	slices.SortStableFunc(ordered, func(a, b int) int { return m.comments[a].created.Compare(m.comments[b].created) })
 	var expected []Comment
-	for _, i := range m.posts[target].comments {
+	for _, i := range ordered {
 		c := m.comments[i]
 		expected = append(expected, Comment{ID: c.id, Author: m.people[c.author].name, Body: c.body, Time: m.clock(c.created), New: c.author != p.index && c.made > since})
 	}

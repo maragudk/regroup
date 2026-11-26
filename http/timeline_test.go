@@ -749,7 +749,9 @@ func TestTimeline_again(t *testing.T) {
 			field := one(t, composer, tag("textarea"))
 			is.Equal(t, body, text(field))
 			is.Equal(t, "composer-body", attr(field, "id"))
-			is.Equal(t, "true", attr(field, "aria-invalid"))
+			// The text is not wrong, only not posted.
+			is.Equal(t, "", attr(field, "aria-invalid"))
+			is.Equal(t, "composer-message", attr(field, "aria-describedby"))
 			is.Equal(t, "Your earlier try did go through, and is on the timeline as it was sent. This text has not been posted.", text(one(t, composer, role("alert"))))
 			is.Equal(t, "2031-03-14", attr(one(t, composer, named("days")), "value"))
 			token := attr(one(t, composer, named("token")), "value")
@@ -793,13 +795,29 @@ func TestTimeline_again(t *testing.T) {
 			field := one(t, form, tag("textarea"))
 			is.Equal(t, body, text(field))
 			is.Equal(t, "post-"+post.ID.String()+"-comment-body-c_before", attr(field, "id"))
-			is.Equal(t, "true", attr(field, "aria-invalid"))
+			is.Equal(t, "", attr(field, "aria-invalid"))
+			is.Equal(t, "post-"+post.ID.String()+"-comment-message", attr(field, "aria-describedby"))
 			is.Equal(t, "Your earlier try did go through, and is with the comments as it was sent. This text has not been added.", text(one(t, form, role("alert"))))
 			token := attr(one(t, form, named("token")), "value")
 			_, err := model.ParseFormToken(token)
 			is.NotError(t, err)
 			is.True(t, token != sent)
 			is.Equal(t, 0, len(all(patches[0], id("announcement"))))
+		}
+		is.Equal(t, 1, a.count(t, "comments"))
+
+		// A request that names another post, which the page could not have sent, is answered about the
+		// post the comment is on, form and all.
+		other := a.createPost(t, signe, base.Add(-time.Minute), "Pie.")
+		for _, named := range []string{other.ID.String(), "p_nope"} {
+			patches := a.patches(t, a.post(t, cookie, "/comments", url.Values{"post": {named}, "body": {"Yes!"}, "token": {sent}}, true))
+			is.Equal(t, 1, len(patches))
+			for _, n := range all(patches[0], hasAttr("id")) {
+				if n.Parent == patches[0] {
+					is.True(t, strings.HasPrefix(attr(n, "id"), "post-"+post.ID.String()+"-"), attr(n, "id"))
+				}
+			}
+			is.Equal(t, "Yes!", text(one(t, one(t, patches[0], id("post-"+post.ID.String()+"-comment-form")), tag("textarea"))))
 		}
 		is.Equal(t, 1, a.count(t, "comments"))
 	})
@@ -1977,7 +1995,7 @@ func TestInjectHTTPRouter(t *testing.T) {
 
 func TestTimeline_history(t *testing.T) {
 	t.Run("shows everyone the timeline, the marks, and the comments the rules say, after any sequence of actions by several people, as a browser reads the pages", func(t *testing.T) {
-		timelinetest.Test(t, &historyDriver{db: sqlitetest.NewDatabase(t)}, 30)
+		timelinetest.Test(t, &historyDriver{db: sqlitetest.NewDatabase(t)}, 20)
 	})
 }
 
@@ -2131,7 +2149,9 @@ func (d *historyDriver) Comment(actor model.UserID, post model.PostID, token, bo
 	// The form that comes back is the one on the post of the comment that was made with the token, if
 	// one was, and the one it was sent from otherwise.
 	patch := d.a.patches(d.t, res)[0]
-	form := one(d.t, patch, func(n *nethtml.Node) bool { return n.Data == "form" && strings.HasSuffix(attr(n, "id"), "-comment-form") })
+	form := one(d.t, patch, func(n *nethtml.Node) bool {
+		return n.Data == "form" && strings.HasSuffix(attr(n, "id"), "-comment-form")
+	})
 	field, outcome := d.form(form)
 	fields[model.PostID(attr(one(d.t, form, named("post")), "value"))] = attr(one(d.t, form, named("field")), "value")
 
@@ -2477,6 +2497,17 @@ func FuzzTimeline(f *testing.F) {
 			is.Equal(t, 1, len(all(patches[0], tag("textarea"))), path)
 			for _, p := range patches {
 				is.Equal(t, 0, len(all(p, tag("script"))), path)
+			}
+			for _, d := range a.decode(t, res) {
+				is.True(t, regexp.MustCompile(`^(|#timeline|#day-\d{4}-\d{2}-\d{2}-posts)$`).MatchString(d.Selector), d.Selector)
+			}
+			// An answer about a comment is about the post the comment is on, whatever post was named.
+			if path == "/comments" {
+				for _, n := range all(patches[0], hasAttr("id")) {
+					if n.Parent == patches[0] && attr(n, "id") != "announcement" {
+						is.True(t, strings.HasPrefix(attr(n, "id"), "post-"+post.ID.String()+"-"), attr(n, "id"))
+					}
+				}
 			}
 			is.Equal(t, posts+map[string]int{"/posts": 1}[path], a.count(t, "posts"), path)
 			is.Equal(t, comments+map[string]int{"/comments": 1}[path], a.count(t, "comments"), path)

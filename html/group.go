@@ -1,6 +1,7 @@
 package html
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 	"time"
@@ -170,6 +171,10 @@ type ComposerProps struct {
 	// Message says why the body was refused, if it was.
 	Message string
 
+	// Notice says something about the body that is not wrong with it, such as that it was not posted,
+	// if there is something to say. It is shown where a message is, and Message goes first.
+	Notice string
+
 	// Days that the page has a heading for at its top, newest first. The form sends them along.
 	Days []model.Date
 
@@ -200,13 +205,13 @@ func Composer(props ComposerProps) Node {
 		Input(Type("hidden"), Name("token"), Value(props.Token)),
 		Div(Class("flex items-end gap-2"),
 			Label(For(fieldID), Class("sr-only"), Text("Write to the group")),
-			textarea(fieldID, "Write to the group", "3", props.Body, props.Message != "", "composer-message", "min-h-[52px] px-[22px] py-3", focus(props.Focus, props.Token)),
+			textarea(fieldID, "Write to the group", "3", props.Body, props.Message != "", props.Message+props.Notice != "", "composer-message", "min-h-[52px] px-[22px] py-3", focus(props.Focus, props.Token)),
 			Button(Type("submit"),
 				Class("inline-flex h-[52px] shrink-0 cursor-pointer items-center rounded-full bg-primary-500 px-[22px] text-stone-900 hover:bg-primary-400 active:bg-primary-600 disabled:cursor-default disabled:opacity-60"),
 				Text("Post"),
 			),
 		),
-		message("composer-message", props.Message),
+		message("composer-message", cmp.Or(props.Message, props.Notice)),
 	)
 }
 
@@ -220,11 +225,12 @@ func joinDays(days []model.Date) string {
 }
 
 // textarea that grows with what is written in it, where the browser can do that, and is as many rows
-// tall as given where it cannot. The given extra goes on it too.
-func textarea(id, placeholder, rows, value string, invalid bool, messageID, class string, extra Node) Node {
+// tall as given where it cannot. It is described by the message with the given ID if it has one. The
+// given extra goes on it too.
+func textarea(id, placeholder, rows, value string, invalid, described bool, messageID, class string, extra Node) Node {
 	return Textarea(ID(id), Name("body"), Rows(rows), Placeholder(placeholder),
 		If(invalid, Aria("invalid", "true")),
-		If(invalid, Aria("describedby", messageID)),
+		If(described, Aria("describedby", messageID)),
 		extra,
 		Class("field-sizing-content max-h-[50vh] w-full min-w-0 resize-none rounded-[26px] border border-stone-500 bg-white leading-[26px] text-stone-900 caret-primary-700 placeholder:text-stone-500 hover:border-stone-900 focus-visible:border-primary-700 focus-visible:-outline-offset-1 "+class),
 		// The browser drops a line break right after the opening tag, so one goes first.
@@ -450,6 +456,9 @@ type CommentFormProps struct {
 	// Message says why the body was refused, if it was.
 	Message string
 
+	// Notice says something about the body that is not wrong with it. See [ComposerProps.Notice].
+	Notice string
+
 	// Fresh, if not empty, becomes part of the field's ID. See [ComposerProps.Fresh].
 	Fresh string
 
@@ -476,10 +485,10 @@ func CommentForm(props CommentFormProps) Node {
 		Input(Type("hidden"), Name("token"), Value(props.Token)),
 		Div(Class("flex items-end gap-2"),
 			Label(For(fieldID), Class("sr-only"), Text("Write a comment")),
-			textarea(fieldID, "Write a comment", "2", props.Body, props.Message != "", messageID, "min-h-11 px-[18px] py-2", focus(props.Focus, props.Token)),
+			textarea(fieldID, "Write a comment", "2", props.Body, props.Message != "", props.Message+props.Notice != "", messageID, "min-h-11 px-[18px] py-2", focus(props.Focus, props.Token)),
 			Button(Type("submit"), Class(secondaryButton+" h-11"), Text("Comment")),
 		),
-		message(messageID, props.Message),
+		message(messageID, cmp.Or(props.Message, props.Notice)),
 	)
 }
 

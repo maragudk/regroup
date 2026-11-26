@@ -191,12 +191,12 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		composer := func(days []model.Date) Node {
 			if changed {
 				return html.Composer(html.ComposerProps{
-					Body:    echo(body),
-					Message: resentPost,
-					Days:    days,
-					Fresh:   echo(props.R.PostFormValue("field")),
-					Token:   token(),
-					Focus:   true,
+					Body:   echo(body),
+					Notice: resentPost,
+					Days:   days,
+					Fresh:  echo(props.R.PostFormValue("field")),
+					Token:  token(),
+					Focus:  true,
 				})
 			}
 			return Group{html.Composer(html.ComposerProps{Days: days, Fresh: post.ID.String(), Token: token(), Focus: true}), posted(post)}
@@ -377,14 +377,16 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			return nil, nil
 		}
 
+		// The form of a comment belongs to its post, so the form that comes back is that post's, even
+		// for a request that names another post, which the page could not have sent.
 		if changed {
 			return comments(props, user, comment.PostID, html.CommentForm(html.CommentFormProps{
-				PostID:  model.PostID(echo(postID.String())),
-				Body:    echo(body),
-				Message: resentComment,
-				Fresh:   echo(props.R.PostFormValue("field")),
-				Token:   token(),
-				Focus:   true,
+				PostID: comment.PostID,
+				Body:   echo(body),
+				Notice: resentComment,
+				Fresh:  echo(props.R.PostFormValue("field")),
+				Token:  token(),
+				Focus:  true,
 			}))
 		}
 

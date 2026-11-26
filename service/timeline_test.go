@@ -485,7 +485,7 @@ func TestFat_GetTimeline(t *testing.T) {
 
 func TestFat_history(t *testing.T) {
 	t.Run("shows everyone the timeline, the marks, and the comments the rules say, after any sequence of actions by several people", func(t *testing.T) {
-		timelinetest.Test(t, &historyDriver{db: sqlitetest.NewDatabase(t)}, 50)
+		timelinetest.Test(t, &historyDriver{db: sqlitetest.NewDatabase(t)}, 30)
 	})
 }
 

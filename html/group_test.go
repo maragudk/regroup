@@ -291,6 +291,17 @@ func TestComposer(t *testing.T) {
 		is.True(t, !strings.Contains(form, "aria-invalid") && !strings.Contains(form, "role=\"alert\""), form)
 	})
 
+	t.Run("says what it has to say about what was typed beside the field, without calling it wrong", func(t *testing.T) {
+		for _, form := range []string{
+			render(t, html.Composer(html.ComposerProps{Body: "Cake", Notice: "Not posted."})),
+			render(t, html.CommentForm(html.CommentFormProps{PostID: "p_1", Body: "Cake", Notice: "Not posted."})),
+		} {
+			is.True(t, !strings.Contains(form, "aria-invalid"), form)
+			is.True(t, regexp.MustCompile(`aria-describedby="(composer|post-p_1-comment)-message"`).MatchString(form), form)
+			is.True(t, regexp.MustCompile(`<p id="(composer|post-p_1-comment)-message" role="alert"[^>]*>.*<span>Not posted\.</span></p>`).MatchString(form), form)
+		}
+	})
+
 	t.Run("has the field take the keyboard focus when it is put on the page, if asked to, unless the focus is elsewhere", func(t *testing.T) {
 		field := textareaOf(t, html.Composer(html.ComposerProps{Focus: true, Token: "q6urq6urq6urq6urq6urqw"}))
 		// The token is in the expression so that it is a new one each time, which Datastar runs again.
