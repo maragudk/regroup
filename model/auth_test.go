@@ -19,7 +19,7 @@ func TestAllowed(t *testing.T) {
 	// action, and one column for each kind of actor. Someone made inactive may do what someone not
 	// signed in may, whatever their role.
 	tests := []struct {
-		action                                 model.Action
+		action                                     model.Action
 		admin, moderator, member, inactive, nobody bool
 	}{
 		{action: model.ActionSignIn, admin: true, moderator: true, member: true, inactive: true, nobody: true},
