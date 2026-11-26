@@ -153,8 +153,9 @@ func TestEncodePatches(t *testing.T) {
 				ht.Fatalf("expected one p element for %q, got %q", text, patches[0].Elements)
 			}
 
-			// A browser reading HTML turns every carriage return into a line feed too.
-			expected := strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+			// A browser reading HTML turns every carriage return into a line feed too, and the text of an
+			// element is written with the replacement character for a NUL.
+			expected := strings.NewReplacer("\r\n", "\n", "\r", "\n", "\x00", "\ufffd").Replace(text)
 			var got string
 			for c := nodes[0].FirstChild; c != nil; c = c.NextSibling {
 				if c.Type != html.TextNode {
@@ -170,22 +171,20 @@ func TestEncodePatches(t *testing.T) {
 }
 
 // hostileText made of pieces that try to end a line, start a field or an event, or open an element,
-// mixed with any other text. It has no NUL character, which a browser reading HTML drops, and which
-// nobody can post.
+// mixed with any other text.
 func hostileText() hegel.Generator[string] {
 	piece := hegel.OneOf(
 		hegel.SampledFrom([]string{
 			"\r", "\n", "\r\n", "\n\n", "\r\r", " ", ":", "event: datastar-patch-elements", "data: elements <b>bold</b>",
 			"data: selector body", "data: mode inner", "id: 1", "retry: 1", ": comment",
 			"<script>alert(1)</script>", "<img src=x onerror=alert(1)>", "</p>", "<p>", "&amp;", "&", "<", ">", "\"", "'",
-			"\u2028", "\u2029", "\u0085", "\ufeff",
+			"\u2028", "\u2029", "\u0085", "\ufeff", "\x00", "\v", "\f",
 		}),
-		hegel.Text().MaxSize(20),
+		hegel.Text(),
 	)
 
 	return hegel.Composite(func(tc hegel.TestCase) string {
-		pieces := hegel.Draw(tc, hegel.Lists(piece).MaxSize(8))
-		return strings.ReplaceAll(strings.Join(pieces, ""), "\x00", "")
+		return strings.Join(hegel.Draw(tc, hegel.Lists(piece)), "")
 	})
 }
 

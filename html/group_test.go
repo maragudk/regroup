@@ -152,7 +152,6 @@ func TestGroupPage(t *testing.T) {
 			body, err := model.CleanPostBody(hegel.Draw(ht, markup()))
 			ht.Assume(err == nil)
 			name := hegel.Draw(ht, markup())
-			ht.Assume(name != "")
 
 			// A browser reading HTML makes a line feed of every carriage return, and shows the replacement
 			// character for a NUL. A body has neither, but nothing says that of a name.
@@ -177,7 +176,12 @@ func TestGroupPage(t *testing.T) {
 				case n.Data == "textarea":
 					fields++
 					expected = body
-					if strings.HasSuffix(attribute(n, "id"), "-"+shown) {
+					// The name is part of the field's ID, unless it is empty.
+					suffix := ""
+					if shown != "" {
+						suffix = "-" + shown
+					}
+					if id := attribute(n, "id"); id == "composer-body"+suffix || id == "post-p_1-comment-body"+suffix {
 						ids++
 					}
 				case attribute(n, "data-body") != "" || len(n.Attr) > 0 && n.Attr[0].Key == "data-body":
@@ -190,11 +194,15 @@ func TestGroupPage(t *testing.T) {
 					continue
 				}
 
-				if n.FirstChild == nil || n.FirstChild != n.LastChild || n.FirstChild.Type != nethtml.TextNode {
-					ht.Fatalf("%q or %q did not come out as one piece of text in %v", body, name, n.Data)
+				var got string
+				for c := n.FirstChild; c != nil; c = c.NextSibling {
+					if c.Type != nethtml.TextNode {
+						ht.Fatalf("%q or %q put something other than text into %v", body, name, n.Data)
+					}
+					got += c.Data
 				}
-				if n.FirstChild.Data != expected {
-					ht.Fatalf("expected %q in %v, got %q", expected, n.Data, n.FirstChild.Data)
+				if got != expected {
+					ht.Fatalf("expected %q in %v, got %q", expected, n.Data, got)
 				}
 			}
 			if bodies != 2 || fields != 2 || names != 3 || ids != 2 {
@@ -223,12 +231,13 @@ func markup() hegel.Generator[string] {
 			"</p>", "</article>", "</textarea>", "</section></main><h1>", "<textarea>", "<!--", "-->", "<![CDATA[", "]]>",
 			"&amp;", "&lt;", "&#39;", "&", "<", ">", `"`, "'", "`", "=", "/", "\n", "\n\n", "\t", " ", "æøå", "😀",
 			`" onmouseover="alert(1)`, "<svg/onload=alert(1)>", "<style>*{display:none}</style>", "<base href=//example.com>",
+			"\r", "\r\n", "\x00",
 		}),
-		hegel.Text().MaxSize(20),
+		hegel.Text(),
 	)
 
 	return hegel.Composite(func(tc hegel.TestCase) string {
-		return strings.Join(hegel.Draw(tc, hegel.Lists(piece).MinSize(1).MaxSize(8)), "")
+		return strings.Join(hegel.Draw(tc, hegel.Lists(piece)), "")
 	})
 }
 
