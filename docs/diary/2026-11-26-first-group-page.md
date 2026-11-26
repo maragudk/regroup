@@ -395,3 +395,108 @@ Validate with `make lint`, `make test`, and `go test -race -shuffle on -tags sql
 - For the stateful hegel builder: `newApp` now reads tokens from ChaCha8 with a zero seed, so the tokens of a run are the same every time. `a.post` adds a fresh token to a form for `/posts` and `/comments` unless the form has a `token` key; give one to model repeats. Draw tokens with `hegel.Binary(16, 16)` and `model.NewFormToken` so that failures replay. The model of a person needs the tokens they have used and what each made: a used token returns the first post or comment whatever is sent, a refused body uses no token, and an empty or malformed token is 400 with nothing made. Reset between cases by deleting `comments` and `posts`.
 - Return the post before the composer in the answer to a post, and make adding it idempotent on the page.
 - Decide with Markus what an edited retry should do.
+
+## Step 5: Edited retries, focus after posting, and generated histories against a model
+
+**Author:** builder
+
+### Prompt Context
+
+**Verbatim prompt:** The lead's brief, which opens: "You are a builder on regroup's group page. Land two small changes first, then write the stateful property-based tests: generated sequences of actions by several people, checked against a simple model."
+**Interpretation:** First, a form sent again with a used token and other text keeps the new text in the field with a message, and focus goes back to the field after posting, commenting, or a refusal, each with a planted-fault proof and a keyboard check in a real browser. Then hegel state machines that run histories of several people against a plain model of the timeline's rules, at the level of the business logic and through the router as a browser reads it, with five planted faults, fuzzing where something that parses input is not fuzzed yet, and a running time that CI can carry.
+**Inferred intent:** Make the rules of the timeline hold for any sequence of actions, not only the ones example tests thought of, so that Markus can trust what he sees on the preview without reading code.
+
+### What I did
+
+**Edited retries.** `service.Fat.CreatePost` and `service.Fat.CreateComment` now return what the token made before together with `model.ErrorFormResentChanged` when the body sent again, once cleaned, is not that body, or cleaning refuses it. The same check runs on what the store returns, for two sends that race. `POST /posts` answers with the composer holding the new text, the notice, a fresh token, and the same field ID, and with the first post placed as before; `POST /comments` answers with the comments of the post the comment is on and that post's form with the new text. Without Datastar both answer 409 with a page that says so. The words are in `resentPost` and `resentComment` in `/http/timeline.go`. After review, the words go through the new `html.ComposerProps.Notice` and `html.CommentFormProps.Notice`, which show where a refusal shows and describe the field, but do not mark it `aria-invalid`.
+
+**Focus.** `html.ComposerProps.Focus` and `html.CommentFormProps.Focus` put a `data-init` on the field: `'<token>' && (document.activeElement === document.body || el.form.contains(document.activeElement)) && el.focus()`. Every answer that puts a form back sets it: after a post, a comment, a refusal, and other text sent again. The page itself never focuses a field.
+
+**Generated histories.** A new package, `/timelinetest`, holds the model, the state machine, and `timelinetest.Test`. A `timelinetest.Driver` is one level of the app: `historyDriver` in `/service/timeline_test.go` calls `service.Fat` on a real database, and `historyDriver` in `/http/timeline_test.go` sends requests through the router of the test app, parses pages and patches as a browser does, and applies the patches for earlier posts to a page of its own. `TestFat_history` and `TestTimeline_history` each run the same machine against their driver. `newApp` in `/http/timeline_test.go` now builds its handler with `app.route`, which the history driver calls for each case, and the test helpers take `testing.TB`. `http.InjectHTTPRouterOptions.TimelinePageSize` sets how many posts a page has, so that paging happens with a handful of posts.
+
+The model is plain slices and maps: people with the count of things made when they joined, at their latest look, and at the look before; posts and comments with the count at which each was made; and per person the tokens they used and what each made. Its rules come from `/docs/todo/group-page.md` and steps 2 to 4 of this diary, and are written out in the package comment. The rules of the machine: join (up to five people, some with HTML in their names), make inactive, move the clock on (by a list of edges or any number of milliseconds up to eight days), to just before, at, or after local midnight, set the clock back by up to two hours, look, get the page after any cursor kept from an earlier answer, post, comment, open comments, send a used form again with the same or other text, and send a malformed token or cursor. A stranger or an inactive person can be the actor of any of them. After every action, `InvariantTimelines` walks the whole timeline of every active person page by page from a cursor after everything, which does not count as a look, and compares order, days, labels, marks, and counts with the model; each rule also checks its own answer.
+
+**Fuzzing.** I listed what parses what a person sends: the cursor, the token, the form values of every route, and the bodies. All but the cleaning of bodies were fuzzed. I added `FuzzCleanPostBody` in `/model/post_test.go` (only the three refusals, a comment is a post with a lower maximum, and what is accepted is valid, trimmed, has no carriage return or control character but line feeds and tabs, is within the maximum, and cleans to itself), and a send again with any body, field, and post at the end of `FuzzTimeline`, which checks that it makes nothing, that the patches decode and aim only at places the page has, and that an answer about a comment is about the post the comment is on.
+
+Decided by me, for the lead and Markus to overrule:
+
+- The wording: "Your earlier try did go through, and is on the timeline as it was sent. This text has not been posted." and "Your earlier try did go through, and is with the comments as it was sent. This text has not been added." No announcement besides the notice, which is a `role="alert"`.
+- Text sent again that cleaning refuses, such as an empty field, counts as other text: the notice, not "Write something first."
+- A comment form sent again naming another post, which the page cannot send, is answered about the post the comment is on.
+- The focus moves only if it is on nothing or inside the form that was sent, so it is not taken from someone who has moved on. The token is in the expression because Datastar's morph sets an attribute only when its value changes, and runs `data-init` again only then; a field that keeps its ID across two refusals would otherwise not take the focus the second time.
+- `TimelinePageSize` is a setting of the router, 0 by default, which leaves it to the business logic (20).
+- Time zones: UTC, Europe/Copenhagen, Pacific/Kiritimati (UTC+14), America/St_Johns (UTC-3:30 with daylight saving), and Pacific/Chatham (UTC+12:45 with daylight saving). The start is drawn by hegel's zoned date-times between 2025 and 2040, which aim at offset changes now and then. Zones whose dates go backwards, such as America/Goose_Bay in 1990, are left out, since `model.GroupByDay` documents that exception and the model groups consecutive posts.
+- Case counts: 30 histories against the business logic and 20 through the router, of 30 steps each. Locally under `-race`, alone, that is about 6 and 8.5 seconds. `HISTORY_CASES` and `HISTORY_STEPS` raise both for a longer run, for example `HISTORY_CASES=2000 HISTORY_STEPS=100 go test -tags sqlite_fts5,sqlite_math_functions -run 'TestFat_history|TestTimeline_history' ./service/ ./http/`. A run of 500 cases of 60 steps took 37 seconds at the business logic and 83 through the router, without `-race`, and passed.
+
+### Why
+
+The brief asked for the model to be obviously right, so it is written from the rules and knows nothing of sequences, read rows, or SQL. Walking every reader's whole timeline after every action is what checks that one person's action changes no mark that someone else sees: the model changes a person's marks only through what they do and what others post, so any other change shows up as a difference on the next walk. The walk uses a cursor after everything, because getting the first page is a look and would change what it observes.
+
+### What worked
+
+- The edited retry, planted: `return p, nil` instead of the check on the look-up in `CreatePost` failed `TestFat_CreatePost_again/returns_the_post_made_the_first_time_and_says_the_text_was_not_posted…` (`Expected "form sent again with other text" (type model.Error), but got "<nil>"`), the router's test (`timeline_test.go:734: Expected "Cake!", but got ""`), and the test without Datastar (`Expected "409", but got "303"`). The same for comments, and for the path where the store returns what a racing send made (`unseenTokens` in `/service/timeline_test.go`).
+- Focus, planted: `focus` returning nothing failed `TestComposer`, `TestCommentForm`, and three router tests (`Expected slice of length 1, but got 0`); the token taken out of the expression failed both component tests.
+- Review fixes, planted: the resent comment's form for the named post failed `TestTimeline_again/keeps_other_text…_comment_form…` (`timeline_test.go:817: Not true`), and `aria-invalid` on a notice failed `TestComposer/says_what_it_has_to_say…` and the router test (`Expected "", but got "true"`).
+- The browser, on my own preview build at `:28655` with a scratch database, by keyboard: two Tabs to the composer, type, Tab to Post, Enter, and the focus was in the new field `composer-body-p_…` with the post on the timeline; a second post typed straight on worked; an empty post twice in a row left the focus in the field both times with "Write something first."; a comment and an empty comment left it in the comment field, `:focus-visible` throughout. With a Playwright route that fetched the real answer and then aborted it, an edited comment sent again kept "Lost answer. Edited." in the field with the notice and one new comment, and sending it once more added it; the same for a post. The console had only the two aborted requests.
+- The five planted faults, each failing at both levels unless noted, with the shrunk history as hegel printed it:
+  - A person's own comment counted as new (`c.author_id != :reader` taken out of the count in `sqlite.Database.GetTimeline`): "Ada posts Note 1; Ada comments on it; the timeline of Ada walked page by page is … 1 comments, 1 new, not … 1 comments, 0 new". Through the router this fault cannot be seen, because commenting on the page opens the post's comments in the same answer, so no history shows it; with the same fault planted in `GetComments` too, the router level failed after "Ada posts; Ada comments" on the comments it opened.
+  - Looking clearing another reader's marks (`where user_id = ? or 1` on the look): "Bjørn joins; Ada posts; Ada looks; Ada looks; the timeline of Bjørn … "Note 1", 0 comments, not "Note 1", new".
+  - Opening comments clearing new-comment marks on every post (the opening recorded for every post): "Bjørn joins; Ada posts twice; Ada comments on the first; Bjørn opens the second; the timeline of Bjørn … "Note 1", new, 1 comments, 0 new, not … 1 new".
+  - Posts from before a person joined marked new (the join trigger starting at 0): "Ada posts; Bjørn joins; the timeline of Bjørn … "Note 1", new, not without".
+  - A repeat with the same token making a second post (the service looking up another token and storing without one): "Ada posts Note 1; Ada sends the form again with \tNote 1\r\n; the post shown is p_0567…, not p_b2c6…".
+- Shrinking: every one shrank to two to five steps. Finding and shrinking took from 3 seconds to 3.5 minutes; the slow ones are those whose shortest history has five steps, since every candidate walks every timeline.
+
+### What didn't work
+
+- The first run of the router's machine died with `panic: expected one matching element, found 0` from `hegel.(*testCase).abort`, in a goroutine of hegel's: the driver failed the test case of the whole run from inside a rule, which hegel runs on a worker of its own. Drivers now fail a `failer`, which panics with a `failure`, and `catch` at the top of every rule turns it into `tc.Errorf`, so a driver's failure shrinks like any other.
+- That panic was a fault in my driver: a comment form sent again to another post is answered with the form of the comment's post, and the driver looked for the form of the post it sent to.
+- With the clock set back, the router's machine failed: "the comments of p_11b2… opened by Ada are c_9887… at 2024-12-31T23:59:59Z, c_f9c7… at 2025-01-01T00:00:00Z, not the other way round". The model listed comments in the order made; the app lists them by time written, as `sqlite.Database.GetComments` documents. The fault was in the model, which now sorts by time and then by order made.
+- The first statistics run (`hegel.WithStatistics(true)`) showed that a page after a cursor was loaded in 1% of cases and a post made in 40%: strangers were drawn as often as each person, two thirds of the bodies were refused, and there were no cursors to load until someone looked after paging. Strangers and refused bodies are now drawn one time in ten and one in five, sending a form again is a rule of its own, and the walks keep their cursors. Pages after a cursor then loaded in 23% of cases and posts in 75%.
+- `git -C <worktree> ls-files '*.go'` and a glob through `cd … &&` were refused by the worktree guard ("names git in a form too complex to verify"). Running with the worktree as working directory works.
+- I repeated step 4's mistake once: `String.prototype.replace` with a replacement holding a dollar sign followed by a backtick (where a regular expression ending in `-posts)$` closed a Go raw string) spliced the text before the match into `/http/timeline_test.go`, which grew to 4,951 lines and failed with `illegal character U+0024 '$'`. I checked the file out again and made the edits with the literal `edit`.
+- The End key in a playwright check scrolled the page to the bottom (Chrome scrolls the page when the caret is already at the end of a textarea), which looked like the focus code scrolling. Without the End key the page stayed at the top.
+- `golangci-lint`: `SA4010: this result of append is never used` in the invariant, a left-over list. Removed.
+- CI, after the first push of the histories with 50 and 30 cases: the test job took 3m33s against 2m37s before, with `app/http` at 21s and `app/service` at 17s against 4.9s and 1.5s, and `app/cmd/app` at 57s against 38s, from sharing the runner's cores. The build step alone went from 44s to 63s in the same run, so part of it is the runner. I lowered the counts to 30 and 20.
+
+### What I learned
+
+- Datastar 1.0.3's morph sets an attribute only when its value differs (`r.getAttribute(l)!==f&&…r.setAttribute(l,f)`), and its observer runs a plugin again on an attribute mutation. So a `data-init` on an element that keeps its ID runs once unless its value changes.
+- hegel's `WithAlwaysCheckInvariants` is needed for an invariant to run after every step; otherwise invariants are sampled between the first and last checks.
+- At the router level, commenting opens the post's comments, so a fault in how one's own comments are counted is invisible there. A fault is only worth planting where a person could see it.
+- Most of the time of the histories is SQLite: checking a session, the user, and the active user on every request, times every page of every walk.
+
+### What was tricky
+
+- Observing without changing what is observed. The first page is a look, so the walk starts from a cursor after everything; the model already says such a page is marked against the look before the latest, which is the rule for pages after the first.
+- Making a page in a browser out of patches: the page after a cursor has headings for the days of the page it came from, so a cursor kept by the router's driver carries those days, and patches go into a page built with them. A patch aimed at an element the page does not have, an ID twice, or a day twice fails the test.
+
+### What warrants review
+
+Self-review: the `code-review` skill on `b32664f..HEAD`, an adversarial reviewer given the code and the rules but not the tests, and the `hegel-review` checklist.
+
+Fixed: a comment form sent again with other text and another post answered about two posts (now about the comment's post, with a test and a fuzz check); a notice marked the field `aria-invalid` though the text is not wrong; a reference in `/docs/todo/verification.md` to this step before it existed; clock steps drawn only from a list (now also any number of milliseconds); the clock never going back, so the order by time and the order made never disagreed (now a rule).
+
+Not changed, for the lead:
+
+- A post sent again is prepended to its day even when the page has it, which gives the page the post twice. Both reviewers found it; it is step 4's "make adding it idempotent on the page". A related case from the adversarial review: a used token sent again after a reload, with days that do not name the post's day, puts a heading for that older day above the newer days. Neither can be sent from the page, which gives every form a new token; a browser restoring a hidden field on reload could. The router's driver does not keep a page per person for posts and comments, so the histories do not see either.
+- Two sends with one token at once, where the second's body is refused: the second gets the refusal, not the notice, and both log "Created post". It needs a crafted request.
+- A cursor the app did not make, such as one after everything, gets every post without counting as a look, marked against the look before the latest. The histories rely on it to walk; nothing leaks, since the marks are the reader's own.
+- Posting without JavaScript redirects to `/`, which counts as a look, though posting does not count as one.
+- With the clock set back, a post made then shows at the top of the page until a reload, and below the newer ones after it.
+
+Gaps in the rules, with the reading the code has, each with a sentence to propose:
+
+- Later pages: "A page after the first is marked against the same look as the first page of the reader's latest look."
+- Order: "Posts with the same time posted are in the order they were made, the latest first; comments are oldest first by the time they were written."
+- Commenting: "Adding a comment shows the post's comments, and counts as opening them."
+- Text sent again: "If a form is sent again after it already made something, nothing new is made; if the text differs, it stays in the field with a note that the earlier try went through."
+- Inactive people: "What someone wrote stays, with their name, after they are made inactive, and they no longer count as a member."
+- The clock: "The timeline follows the time things were posted, even if the host's clock was wrong when they were."
+
+Validate with `make lint`, `make test`, and `go test -race -shuffle on -tags sqlite_fts5,sqlite_math_functions,sqlite_foreign_keys ./...`. Fuzz with `go test ./model/ -run '^$' -fuzz '^FuzzCleanPostBody$'` and `go test ./http/ -run '^$' -fuzz '^FuzzTimeline$'`. On the preview, post by keyboard and see the focus come back to the field; cut the network after sending, change the text, and send again.
+
+### Future work
+
+- Keep a page per person in the router's driver, apply the answers to posts and comments to it, and check it after each, once a post sent again is idempotent on the page.
+- The nightly workflow can set `HISTORY_CASES` and `HISTORY_STEPS`.
+- Replaying a failure from its reproduction blob is still untried; the printed draws were enough to read every failure here.
