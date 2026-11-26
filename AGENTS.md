@@ -71,3 +71,7 @@ Commit an export to `docs/conversations/` on `main` and push it, with no branch 
 ### Markus is the oracle for product behaviour; build first, then adjust
 
 On 2026-11-26, asked what regroup's test oracle is, Markus said: "I don't think we can have a test oracle. For product behavior, I guess I'm the oracle? But lean towards building something and then we can adjust. Nothing is in production until I say so, so we can break stuff and iterate." So build a piece, show it to him, and adjust, instead of settling every rule or building heavy test machinery first. He chose the same day to judge each piece of work in two ways: a preview instance he uses himself, and a page of screenshots. What is agreed and what is open about verification is in `docs/todo/verification.md`.
+
+### The tailnet name may appear in public files
+
+Markus on 2026-11-26, about a conversation export that mentioned `mini3.king-dojo.ts.net`: "The tailnet name is fine". So don't hold back or flag an export or document for the tailnet name alone. IP addresses, keys, and tokens are a different matter and still get flagged.
