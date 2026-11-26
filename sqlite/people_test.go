@@ -405,7 +405,7 @@ func TestDatabase_ChangeRole(t *testing.T) {
 		is.NotError(t, err)
 		is.Equal(t, model.RoleMember, u.Role)
 
-		var target *model.User = &model.User{}
+		target := &model.User{}
 		_, err = db.ChangeRole(t.Context(), markus.ID, "u_nope", model.RoleAdmin, func(_ model.User, t *model.User) error {
 			target = t
 			return model.ErrorMemberNotFound

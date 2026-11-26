@@ -249,8 +249,8 @@ func TestPeople_telemetry(t *testing.T) {
 		var servers int
 		for _, span := range spans.Ended() {
 			for _, attr := range span.Attributes() {
-				is.True(t, !strings.Contains(attr.Value.Emit(), token), "span "+span.Name()+" holds the token in "+string(attr.Key))
-				is.True(t, !strings.Contains(attr.Value.Emit(), "signe@example.com"), "span "+span.Name()+" holds the address in "+string(attr.Key))
+				is.True(t, !strings.Contains(attr.Value.String(), token), "span "+span.Name()+" holds the token in "+string(attr.Key))
+				is.True(t, !strings.Contains(attr.Value.String(), "signe@example.com"), "span "+span.Name()+" holds the address in "+string(attr.Key))
 				if attr.Key == "url.query" {
 					servers++
 					is.True(t, attr.Value.AsString() == "token=hidden" || attr.Value.AsString() == "token=hidden&token=hidden", attr.Value.AsString())
