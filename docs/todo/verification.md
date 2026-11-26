@@ -21,3 +21,7 @@ How we know regroup does what it should, given that Markus does not read the cod
 - Whether time, randomness, and email should be replayable from a seed from the start, as in s4ql, or added when the heavier checks are.
 - How sign-in emails reach Markus on the preview.
 - Checks for the promises in the core values, such as that no page asks a third party for anything.
+
+## Found while evaluating tools
+
+- With the settings in `.env.example`, the content security policy blocks Datastar, so nothing interactive can run. Bombadil reported it on its first run, and no Go test catches it. See `docs/research/bombadil.md`. It has to be fixed before the first interactive page.
