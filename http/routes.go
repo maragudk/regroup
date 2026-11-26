@@ -36,10 +36,14 @@ type InjectHTTPRouterOptions struct {
 // InjectHTTPRouter returns what adds the app's routes to a router. No response of theirs may be stored.
 func InjectHTTPRouter(log *slog.Logger, svc *service.Fat, opts InjectHTTPRouterOptions) func(*Router) {
 	return func(r *Router) {
-		r.Use(noStore, AddUserToContext(log, svc))
+		r.Use(noStore, hideTokens, AddUserToContext(log, svc))
 
 		r.Group(func(r *Router) {
 			timeline(r, log, svc, opts)
+		})
+
+		r.Group(func(r *Router) {
+			people(r, log, svc)
 		})
 	}
 }

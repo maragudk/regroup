@@ -4,12 +4,13 @@ package service
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
-	"maragu.dev/glue/email/postmark"
+	"maragu.dev/glue/email"
 	"maragu.dev/glue/s3"
 
 	"app/model"
@@ -29,12 +30,24 @@ type Fat struct {
 	log    *slog.Logger
 	tracer trace.Tracer
 
-	createComment func(ctx context.Context, actor model.UserID, postID model.PostID, token, body string) (model.Comment, error)
-	createPost    func(ctx context.Context, actor model.UserID, token, body string) (model.Post, error)
-	getComments   func(ctx context.Context, actor model.UserID, postID model.PostID) ([]model.TimelineComment, error)
-	getMembers    func(ctx context.Context, actor model.UserID) (int, error)
-	getTimeline   func(ctx context.Context, actor model.UserID, cursor string, limit int) (model.Timeline, error)
-	getUser       func(ctx context.Context, id model.UserID) (model.User, error)
+	acceptInvitation   func(ctx context.Context, token, name string) (model.User, error)
+	changeRole         func(ctx context.Context, actor, target model.UserID, role string) error
+	checkInvitation    func(ctx context.Context, token string) (model.InvitationCheck, error)
+	checkSignInLink    func(ctx context.Context, token string) (model.SignInLinkCheck, error)
+	createComment      func(ctx context.Context, actor model.UserID, postID model.PostID, token, body string) (model.Comment, error)
+	createPost         func(ctx context.Context, actor model.UserID, token, body string) (model.Post, error)
+	getComments        func(ctx context.Context, actor model.UserID, postID model.PostID) ([]model.TimelineComment, error)
+	getInvitations     func(ctx context.Context, actor model.UserID) ([]model.Invitation, error)
+	getMembers         func(ctx context.Context, actor model.UserID) (int, error)
+	getTimeline        func(ctx context.Context, actor model.UserID, cursor string, limit int) (model.Timeline, error)
+	getUser            func(ctx context.Context, id model.UserID) (model.User, error)
+	invite             func(ctx context.Context, actor model.UserID, address string) (model.Invitation, error)
+	listMembers        func(ctx context.Context, actor model.UserID) ([]model.Member, error)
+	requestSignInLink  func(ctx context.Context, address string) error
+	sendInvitation     func(ctx context.Context, id model.InvitationID) error
+	sendSignInLink     func(ctx context.Context, address model.EmailAddress) error
+	signIn             func(ctx context.Context, token, name string) (model.User, error)
+	withdrawInvitation func(ctx context.Context, actor model.UserID, id model.InvitationID) error
 }
 
 // NewFatOptions is the configuration a [Fat] carries whatever it ends up wired to. The capabilities
@@ -61,16 +74,30 @@ func NewFat(opts NewFatOptions) *Fat {
 //
 // The wiring functions it calls are the list of what each operation actually depends on. A capability
 // that no operation wires yet is a parameter all the same, so the first operation to need one finds it
-// already plumbed: bucket and sender are waiting like that.
+// already plumbed: bucket is waiting like that.
 //
-// The clock is passed in, so that no operation reads the time directly.
-func Setup(f *Fat, bucket *s3.Bucket, db *sqlite.Database, sender *postmark.Sender, now func() time.Time, group model.Group) {
+// The clock and the randomness are passed in, so that no operation reads the time or makes a secret
+// directly. The randomness must be safe for concurrent use, as [crypto/rand.Reader] is. The first admin
+// is the address the configuration names, or empty if it names none.
+func Setup(f *Fat, bucket *s3.Bucket, db *sqlite.Database, sender email.Sender, now func() time.Time, random io.Reader, group model.Group, firstAdmin model.EmailAddress) {
+	AcceptInvitation(f, db, now)
+	ChangeRole(f, db)
+	CheckInvitation(f, db, now)
+	CheckSignInLink(f, db, now, firstAdmin)
 	CreateComment(f, db, now)
 	CreatePost(f, db, now)
 	GetComments(f, db)
+	GetInvitations(f, db, now)
 	GetMembers(f, db)
 	GetTimeline(f, db, now, group)
 	GetUser(f, db)
+	Invite(f, db, now)
+	ListMembers(f, db)
+	RequestSignInLink(f, db)
+	SendInvitation(f, db, sender, now, random, group)
+	SendSignInLink(f, db, sender, now, random, group, firstAdmin)
+	SignIn(f, db, now, firstAdmin)
+	WithdrawInvitation(f, db)
 }
 
 // userGetter is the store a user is read from.

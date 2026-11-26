@@ -28,7 +28,7 @@ func CreatePost(f *Fat, db postCreator, now func() time.Time) {
 	}
 
 	f.createPost = func(ctx context.Context, actor model.UserID, token, body string) (model.Post, error) {
-		if err := checkActive(ctx, db, actor); err != nil {
+		if _, err := authorize(ctx, db, actor, model.ActionPost); err != nil {
 			return model.Post{}, err
 		}
 
@@ -105,7 +105,7 @@ func CreateComment(f *Fat, db commentCreator, now func() time.Time) {
 	}
 
 	f.createComment = func(ctx context.Context, actor model.UserID, postID model.PostID, token, body string) (model.Comment, error) {
-		if err := checkActive(ctx, db, actor); err != nil {
+		if _, err := authorize(ctx, db, actor, model.ActionPost); err != nil {
 			return model.Comment{}, err
 		}
 
@@ -189,7 +189,7 @@ func GetTimeline(f *Fat, db timelineGetter, now func() time.Time, group model.Gr
 	}
 
 	f.getTimeline = func(ctx context.Context, actor model.UserID, cursor string, limit int) (model.Timeline, error) {
-		if err := checkActive(ctx, db, actor); err != nil {
+		if _, err := authorize(ctx, db, actor, model.ActionRead); err != nil {
 			return model.Timeline{}, err
 		}
 
@@ -262,7 +262,7 @@ func GetComments(f *Fat, db commentsGetter) {
 	}
 
 	f.getComments = func(ctx context.Context, actor model.UserID, postID model.PostID) ([]model.TimelineComment, error) {
-		if err := checkActive(ctx, db, actor); err != nil {
+		if _, err := authorize(ctx, db, actor, model.ActionRead); err != nil {
 			return nil, err
 		}
 
@@ -298,17 +298,21 @@ func resentChanged(stored, sent string, clean func(string) (string, error)) erro
 	return nil
 }
 
-// checkActive that the acting user exists and is active, or return [model.ErrorUserNotFound] or
-// [model.ErrorUserInactive].
-func checkActive(ctx context.Context, db userGetter, actor model.UserID) error {
+// authorize the acting user to take the given action, by [model.Allowed], and return them. Returns
+// [model.ErrorUserNotFound] if there is no such user, [model.ErrorUserInactive] if they are not active,
+// and [model.ErrorNotAllowed] if their role does not have the right.
+func authorize(ctx context.Context, db userGetter, actor model.UserID, action model.Action) (model.User, error) {
 	u, err := db.GetUser(ctx, actor)
 	if err != nil {
-		return err
+		return model.User{}, err
 	}
 	if !u.Active {
-		return model.ErrorUserInactive
+		return model.User{}, model.ErrorUserInactive
 	}
-	return nil
+	if !model.Allowed(&u, action, nil) {
+		return model.User{}, model.ErrorNotAllowed
+	}
+	return u, nil
 }
 
 // recordError on the span, if there is one and it is not a refusal from the business domain, such as an

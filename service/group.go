@@ -21,7 +21,7 @@ func GetMembers(f *Fat, db membersCounter) {
 	}
 
 	f.getMembers = func(ctx context.Context, actor model.UserID) (int, error) {
-		if err := checkActive(ctx, db, actor); err != nil {
+		if _, err := authorize(ctx, db, actor, model.ActionRead); err != nil {
 			return 0, err
 		}
 
