@@ -200,6 +200,28 @@ func TestFat_SendSignInLink(t *testing.T) {
 	})
 }
 
+func TestFat_firstAdmin(t *testing.T) {
+	t.Run("keeps the first admin an admin who can sign in when the configuration names someone else later, and lets the new address in nowhere", func(t *testing.T) {
+		p := newPeople(t, "markus@example.com", nil)
+		markus, err := p.fat.SignIn(t.Context(), p.link(t, "markus@example.com"), "Markus")
+		is.NotError(t, err)
+
+		// The host changes the setting, and the app starts again with it.
+		changed := service.NewFat(service.NewFatOptions{})
+		service.Setup(changed, nil, p.db, p.sender, p.clock.Now, rand.NewChaCha8([32]byte{2}), model.Group{Name: "The Loft", TimeZone: time.UTC}, "signe@example.com")
+		p.fat = changed
+
+		is.NotError(t, p.fat.RequestSignInLink(t.Context(), "signe@example.com"))
+		is.Equal(t, 0, len(p.runJobs(t)))
+
+		u, err := p.fat.SignIn(t.Context(), p.link(t, "markus@example.com"), "")
+		is.NotError(t, err)
+		is.Equal(t, markus.ID, u.ID)
+		is.Equal(t, model.RoleAdmin, u.Role)
+		is.Equal(t, 1, count(t, p.db, "users"))
+	})
+}
+
 func TestFat_SignIn(t *testing.T) {
 	t.Run("signs in the person, once, and not with any other link they had", func(t *testing.T) {
 		p := newPeople(t, "", nil)
