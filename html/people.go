@@ -344,7 +344,7 @@ func invitations(props MembersPageProps) Node {
 								Text(". Runs out "+expiry(inv.Expires.T, props.Now)+"."),
 							),
 						),
-						If(withdraw, Form(Data("form", "withdraw-invitation"), Method("post"), Action("/invitations/withdraw"), Class("ml-auto"),
+						If(withdraw, Form(Data("form", "withdraw-invitation"), Method("post"), Action("/invitations/withdraw"),
 							Input(Type("hidden"), Name("invitation"), AutoComplete("off"), Value(inv.ID.String())),
 							Button(Type("submit"), Class(secondaryButton+" h-11"),
 								Text("Withdraw"),

@@ -276,6 +276,6 @@ export const exploring = weighted([
   [10, actions(() => openThreads.current.map((postID) => commentWhileReopening(postID, "While reopening " + tag())))],
   // Loads earlier posts. The button is at the end of the timeline, further down than scrolling often gets.
   [10, actions(() => (earlierOffered.current ? [loadEarlier()] : []))],
-  // Signs out, by the route the app has for it, which no page links to yet.
+  // Signs out, by the route the button on the sign sends to, from wherever the group page is.
   [2, actions(() => (onGroupPage.current ? [signOut()] : []))],
 ]);
