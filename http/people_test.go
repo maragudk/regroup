@@ -9,9 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"maragu.dev/glue/oteltest"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"maragu.dev/is"
 
+	apphttp "app/http"
 	"app/jobs"
 	"app/jobstest"
 	"app/model"
@@ -236,27 +239,50 @@ func TestPeople_invitation(t *testing.T) {
 }
 
 func TestPeople_telemetry(t *testing.T) {
-	t.Run("keeps the token of a link out of the request's span", func(t *testing.T) {
-		spans := oteltest.NewSpanRecorder(t)
+	t.Run("keeps the token of a link and an email address out of every span, whatever the request", func(t *testing.T) {
+		sr := tracetest.NewSpanRecorder()
+		previous := otel.GetTracerProvider()
+		otel.SetTracerProvider(apphttp.HideQueryValues(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))))
+		t.Cleanup(func() { otel.SetTracerProvider(previous) })
+
 		a := newApp(t)
 		sqlitetest.CreatePerson(t, a.db, "Signe", "signe@example.com", model.RoleMember)
 		token := a.link(t, "signe@example.com")
 
-		a.get(t, nil, "/sign-in/link?token="+token)
-		a.get(t, nil, "/invitation?token="+token+"&token=another")
-		a.post(t, nil, "/sign-in/link", url.Values{"token": {token}}, false)
+		for _, req := range []*http.Request{
+			httptest.NewRequest(http.MethodGet, "/sign-in/link?token="+token, nil),
+			httptest.NewRequest(http.MethodHead, "/sign-in/link?token="+token, nil),
+			httptest.NewRequest(http.MethodDelete, "/invitation?token="+token, nil),
+			httptest.NewRequest(http.MethodGet, "/sign-in/link/?token="+token, nil),
+			httptest.NewRequest(http.MethodGet, "/nowhere?token="+token, nil),
+			httptest.NewRequest(http.MethodGet, "/sign-in/link?token="+token+";x", nil),
+			httptest.NewRequest(http.MethodGet, "/sign-in/link?Token="+token+"&x=%zz", nil),
+			httptest.NewRequest(http.MethodPost, "/sign-in?email=signe@example.com", nil),
+		} {
+			a.handler.ServeHTTP(httptest.NewRecorder(), req)
+		}
+		res := a.post(t, nil, "/sign-in/link", url.Values{"token": {token}}, false)
+		is.Equal(t, http.StatusSeeOther, res.Code)
 
-		var servers int
-		for _, span := range spans.Ended() {
+		var queries int
+		for _, span := range sr.Ended() {
 			for _, attr := range span.Attributes() {
 				is.True(t, !strings.Contains(attr.Value.String(), token), "span "+span.Name()+" holds the token in "+string(attr.Key))
-				is.True(t, !strings.Contains(attr.Value.String(), "signe@example.com"), "span "+span.Name()+" holds the address in "+string(attr.Key))
+				is.True(t, !strings.Contains(attr.Value.String(), "signe@"), "span "+span.Name()+" holds the address in "+string(attr.Key))
 				if attr.Key == "url.query" {
-					servers++
-					is.True(t, attr.Value.AsString() == "token=hidden" || attr.Value.AsString() == "token=hidden&token=hidden", attr.Value.AsString())
+					queries++
 				}
 			}
 		}
-		is.Equal(t, 2, servers)
+		is.Equal(t, 8, queries)
+	})
+
+	t.Run("takes the fields of a form from its body only, not from the query, where they would be in the request's span", func(t *testing.T) {
+		a := newApp(t)
+		sqlitetest.CreatePerson(t, a.db, "Signe", "signe@example.com", model.RoleMember)
+
+		res := a.post(t, nil, "/sign-in?email=signe@example.com", nil, false)
+		is.Equal(t, http.StatusBadRequest, res.Code)
+		is.Equal(t, 0, len(jobstest.Take(t, a.db)))
 	})
 }

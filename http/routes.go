@@ -36,7 +36,7 @@ type InjectHTTPRouterOptions struct {
 // InjectHTTPRouter returns what adds the app's routes to a router. No response of theirs may be stored.
 func InjectHTTPRouter(log *slog.Logger, svc *service.Fat, opts InjectHTTPRouterOptions) func(*Router) {
 	return func(r *Router) {
-		r.Use(noStore, hideTokens, AddUserToContext(log, svc))
+		r.Use(noStore, noReferrer, AddUserToContext(log, svc))
 
 		r.Group(func(r *Router) {
 			timeline(r, log, svc, opts)
@@ -53,6 +53,15 @@ func InjectHTTPRouter(log *slog.Logger, svc *service.Fat, opts InjectHTTPRouterO
 func noStore(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// noReferrer tells browsers to send no Referer header from a page, since the address of a page can hold
+// the secret of a link in an email, and the group is private.
+func noReferrer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})
 }

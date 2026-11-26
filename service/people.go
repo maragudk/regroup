@@ -70,6 +70,7 @@ func (f *Fat) RequestSignInLink(ctx context.Context, address string) error {
 type signInLinkSender interface {
 	GetSignInTarget(ctx context.Context, email, firstAdmin model.EmailAddress) (model.User, bool, error)
 	CreateSignInLink(ctx context.Context, l model.SignInLink, limit int, since model.Time) (bool, error)
+	DeleteSignInLink(ctx context.Context, hash string) error
 }
 
 // SendSignInLink wires [Fat.SendSignInLink] to the given store, sender, clock, and randomness, for the
@@ -128,6 +129,10 @@ func SendSignInLink(f *Fat, db signInLinkSender, sender emailSender, now func() 
 			ToName:    u.Name,
 		})
 		if err != nil {
+			// A link that was not sent does not count towards the limit, so that trying again can send one.
+			if deleteErr := db.DeleteSignInLink(ctx, token.Hash()); deleteErr != nil {
+				return errors.Join(err, deleteErr)
+			}
 			return err
 		}
 
@@ -144,7 +149,8 @@ func SendSignInLink(f *Fat, db signInLinkSender, sender emailSender, now func() 
 
 // SendSignInLink to the given address, which [model.ParseEmailAddress] returned, if it is the address of
 // an active person, or the first admin's while the group has nobody in it. Any other address gets
-// nothing, and so does an address that was sent [model.SignInLinksPerHour] links in the hour before.
+// nothing, and so does an address that was sent [model.SignInLinksPerHour] links in the hour before. A
+// link whose email could not be sent is not kept, and does not count.
 // The link works once, for [model.SignInLinkLifetime], and only the hash of its token is stored.
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.

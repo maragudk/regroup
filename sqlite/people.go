@@ -79,6 +79,11 @@ func (d *Database) CreateSignInLink(ctx context.Context, l model.SignInLink, lim
 	return created, err
 }
 
+// DeleteSignInLink with the given hash, if there is one.
+func (d *Database) DeleteSignInLink(ctx context.Context, hash string) error {
+	return d.H.Exec(ctx, `delete from sign_in_links where hash = ?`, hash)
+}
+
 // CheckSignInLink with the given hash, at the given time: what signing in with it would do. A link works
 // if it is not used up and has not expired, and the address it was sent to is one of these:
 //   - the address of an active person, who it signs in, or

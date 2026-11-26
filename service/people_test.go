@@ -190,13 +190,19 @@ func TestFat_SendSignInLink(t *testing.T) {
 		p.link(t, "signe@example.com")
 	})
 
-	t.Run("fails if the email cannot be sent, so that the job is tried again", func(t *testing.T) {
+	t.Run("fails if the email cannot be sent, so that the job is tried again, and keeps no link that was not sent, so none counts towards the limit", func(t *testing.T) {
 		p := newPeople(t, "", nil)
 		p.person(t, "Signe", model.RoleMember)
 		p.sender.Fail(errors.New("no"))
 
-		err := p.fat.SendSignInLink(t.Context(), "signe@example.com")
-		is.True(t, err != nil)
+		for range 6 {
+			err := p.fat.SendSignInLink(t.Context(), "signe@example.com")
+			is.True(t, err != nil)
+		}
+		is.Equal(t, 0, count(t, p.db, "sign_in_links"))
+
+		p.sender.Fail(nil)
+		p.link(t, "signe@example.com")
 	})
 }
 
