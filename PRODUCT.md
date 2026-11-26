@@ -9,8 +9,8 @@ web
 ## Users
 
 - **Members** of a private group. Regroup is for any private community: people who already know each other, such as a shared office or a club, and online-only communities alike. A member joins because someone they trust invited them.
-- **Group admins and moderators**, who are members looking after their own group.
-- **Hosts**, who run a regroup instance. Anyone can host. Who typically hosts is not yet established.
+- **Admins and moderators**, who are members looking after their own group. A group has three roles: admin, moderator, and member.
+- **Hosts**, who run a regroup instance. Anyone can host, and one instance holds one group. Who typically hosts is not yet established.
 
 The first real group is Markus's shared office space. It is the test case for deciding what to build first.
 
@@ -40,9 +40,13 @@ What success means, beyond the shared office group using it, is not yet defined.
 
 Confirmed for a group:
 
+- One instance holds one group. A second group is a second installation.
+- One timeline of what was posted, in time order. Things stay where they were posted, and a member sees a mark on what is new to them.
 - Discussions: posts and comments.
-- Events.
+- Events. An event is a post with a date, and upcoming events also have their own list.
 - Photos. Generic file sharing is not part of the product.
+- Members sign in with a link sent to their email address. There are no passwords.
+- People join by invitation. Moderators and admins can invite.
 
 Confirmed by the core values (`docs/core-values.md`), which win over any feature that conflicts with them:
 
