@@ -32,6 +32,14 @@ fmt:
 lint:
 	golangci-lint run
 
+# Runs the preview build, which only the preview build tag compiles in: it fills an empty database with a
+# made-up office group, "The Loft", timed from now, and lists its people at /preview to sign in as any of
+# them. It uses the settings in .env, including DATABASE_PATH and the port, so stop make watch first.
+# To seed afresh, delete the database with its -wal and -shm files.
+.PHONY: preview
+preview:
+	go run -tags preview,sqlite_fts5,sqlite_math_functions ./cmd/app
+
 tailwindcss:
 	curl -sfL -o tailwindcss https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-macos-arm64
 	chmod a+x tailwindcss

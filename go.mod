@@ -3,9 +3,11 @@ module app
 go 1.27
 
 require (
+	github.com/alexedwards/scs/v2 v2.9.0
 	github.com/mattn/go-sqlite3 v1.14.49
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
+	hegel.dev/go/hegel v0.10.3
 	maragu.dev/env v0.2.0
 	maragu.dev/errors v0.3.0
 	maragu.dev/glue v0.0.0-20260824085602-5e40bf3e8a1d
@@ -17,7 +19,6 @@ require (
 
 require (
 	github.com/alexedwards/scs/sqlite3store v0.0.0-20250417082927-ab20b3feb5e9 // indirect
-	github.com/alexedwards/scs/v2 v2.9.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.5 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.32.7 // indirect
@@ -40,6 +41,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/ebitengine/purego v0.12.0-alpha.1.0.20261015130536-d456b1bb95e8 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-chi/chi/v5 v5.3.1 // indirect
@@ -51,7 +53,6 @@ require (
 	github.com/honeycombio/otel-config-go v1.17.0 // indirect
 	github.com/jmoiron/sqlx v1.4.0 // indirect
 	github.com/justincampbell/timeago v0.0.0-20160528003754-027f40306f1d // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20240513124658-fba389f38bae // indirect
 	github.com/mileusna/useragent v1.3.5 // indirect
 	github.com/mitchellh/mapstructure v1.5.1-0.20231216201459-8508981c8b6c // indirect
