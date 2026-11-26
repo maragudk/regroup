@@ -24,6 +24,10 @@ type InjectHTTPRouterOptions struct {
 	// given, or [InjectHTTPRouter] panics, and a page that cannot read from it panics too.
 	Random io.Reader
 
+	// TimelinePageSize is how many posts a page of the timeline has. If it is 0, the business logic
+	// decides.
+	TimelinePageSize int
+
 	// Extra, if not nil, returns something for the group page to show beside the name of the person
 	// who is signed in, and for the page that says the group is private to show under that.
 	Extra func(signedIn bool) Node

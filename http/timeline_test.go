@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,7 @@ import (
 	"app/service"
 	"app/sqlite"
 	"app/sqlitetest"
+	"app/timelinetest"
 )
 
 // base is a Friday morning that is not today, so that a test can tell the clock it gives from the real
@@ -1973,6 +1975,429 @@ func TestInjectHTTPRouter(t *testing.T) {
 	})
 }
 
+func TestTimeline_history(t *testing.T) {
+	t.Run("shows everyone the timeline, the marks, and the comments the rules say, after any sequence of actions by several people, as a browser reads the pages", func(t *testing.T) {
+		timelinetest.Test(t, &historyDriver{db: sqlitetest.NewDatabase(t)}, 30)
+	})
+}
+
+// historyDriver runs a history against the app's routes, reading the pages and patches as a browser does.
+// Each person has a page in a browser, which knows what its composer and its comment forms say.
+type historyDriver struct {
+	t       testing.TB
+	db      *sqlite.Database
+	a       *app
+	cookies map[model.UserID]*http.Cookie
+
+	// composers holds the days and the field that the composer on each person's page sends.
+	composers map[model.UserID]url.Values
+
+	// commentFields holds the field that each comment form on each person's page sends.
+	commentFields map[model.UserID]map[model.PostID]string
+}
+
+func (d *historyDriver) Reset(t testing.TB, zone *time.Location, now time.Time, pageSize int) {
+	d.t = t
+	for _, table := range []string{"comments", "posts", "users", "accounts"} {
+		if err := d.db.H.Exec(t.Context(), "delete from "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	d.a = &app{db: d.db, sm: scs.New(), clock: &clock{t: now}, logs: &logs{}}
+	d.a.store = &store{Database: d.db, fail: map[string]error{}}
+	d.a.route(model.Group{Name: "The Loft", TimeZone: zone}, nil, pageSize)
+	d.cookies = map[model.UserID]*http.Cookie{}
+	d.composers = map[model.UserID]url.Values{}
+	d.commentFields = map[model.UserID]map[model.PostID]string{}
+}
+
+func (d *historyDriver) Join(name string) model.UserID {
+	u := sqlitetest.CreateUser(d.t, d.db, name)
+	d.cookies[u.ID] = d.a.signIn(d.t, u)
+	return u.ID
+}
+
+func (d *historyDriver) Deactivate(id model.UserID) {
+	sqlitetest.DeactivateUser(d.t, d.db, id)
+}
+
+func (d *historyDriver) SetClock(now time.Time) {
+	d.a.clock.t = now
+}
+
+func (d *historyDriver) Look(actor model.UserID) timelinetest.PageAnswer {
+	res := d.a.get(d.t, d.cookies[actor], "/")
+	if res.Code != http.StatusOK {
+		d.t.Fatalf("the group page answered %v", res.Code)
+	}
+	doc := parse(d.t, res.Body.String())
+	if len(all(doc, func(n *nethtml.Node) bool { return n.Data == "h1" && text(n) == "This group is private." })) > 0 {
+		return timelinetest.PageAnswer{Outcome: timelinetest.Private, Shown: text(doc)}
+	}
+	d.checkIDs(doc)
+
+	page := timelinetest.Page{Days: d.days(doc, nil), Next: d.cursor(doc), Members: -1}
+	sign := text(one(d.t, doc, tag("header")))
+	if _, err := fmt.Sscanf(regexp.MustCompile(`\d+ members?`).FindString(sign), "%d", &page.Members); err != nil {
+		d.t.Fatalf("no count of members on the sign %q", sign)
+	}
+
+	// A new page in the browser, with its forms as they are.
+	composer := one(d.t, doc, id("composer"))
+	d.composers[actor] = url.Values{"days": {attr(one(d.t, composer, named("days")), "value")}, "field": {attr(one(d.t, composer, named("field")), "value")}}
+	d.commentFields[actor] = map[model.PostID]string{}
+
+	return timelinetest.PageAnswer{Page: page}
+}
+
+func (d *historyDriver) Earlier(actor model.UserID, c timelinetest.Cursor) timelinetest.PageAnswer {
+	doc := d.scratch(c.Shown)
+	res := d.a.post(d.t, d.cookies[actor], "/posts/earlier", url.Values{"after": {c.After}, "days": {c.Days}}, true)
+	if o, ok := d.refused(res); ok {
+		return timelinetest.PageAnswer{Outcome: o, Shown: text(parse(d.t, res.Body.String()))}
+	}
+	d.apply(doc, d.a.decode(d.t, res))
+	return timelinetest.PageAnswer{Page: timelinetest.Page{Days: d.days(doc, nil), Next: d.cursor(doc), Members: -1}}
+}
+
+func (d *historyDriver) Walk(actor model.UserID) ([]timelinetest.PageAnswer, timelinetest.Outcome) {
+	// The cursor after a post at the end of time, by the last order there can be, gets every post. The
+	// page starts without a day on it, and each answer adds to it.
+	top := model.TimelineCursor{Created: model.Time{T: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)}, Seq: math.MaxInt64}
+	doc := d.scratch(nil)
+	shown := map[model.PostID]bool{}
+	var pages []timelinetest.PageAnswer
+	for c := (&timelinetest.Cursor{After: top.String()}); c != nil; {
+		res := d.a.post(d.t, d.cookies[actor], "/posts/earlier", url.Values{"after": {c.After}, "days": {c.Days}}, true)
+		if o, ok := d.refused(res); ok {
+			return pages, o
+		}
+		d.apply(doc, d.a.decode(d.t, res))
+
+		page := timelinetest.Page{Days: d.days(doc, shown), Next: d.cursor(doc), Members: -1}
+		for _, day := range page.Days {
+			for _, p := range day.Posts {
+				shown[p.ID] = true
+			}
+		}
+		pages = append(pages, timelinetest.PageAnswer{Page: page})
+		c = page.Next
+	}
+	return pages, timelinetest.Done
+}
+
+func (d *historyDriver) Post(actor model.UserID, token, body string) timelinetest.PostAnswer {
+	composer := d.composers[actor]
+	res := d.a.post(d.t, d.cookies[actor], "/posts", url.Values{"body": {body}, "token": {token}, "days": {composer.Get("days")}, "field": {composer.Get("field")}}, true)
+	if o, ok := d.refused(res); ok {
+		return timelinetest.PostAnswer{Outcome: o, Shown: text(parse(d.t, res.Body.String()))}
+	}
+
+	decoded, patches := d.a.decode(d.t, res), d.a.patches(d.t, res)
+	form := one(d.t, patches[0], id("composer"))
+	field, outcome := d.form(form)
+	d.composers[actor] = url.Values{"days": {attr(one(d.t, form, named("days")), "value")}, "field": {attr(one(d.t, form, named("field")), "value")}}
+
+	answer := timelinetest.PostAnswer{Outcome: outcome, Field: &field}
+	for i, p := range patches[1:] {
+		articles := all(p, tag("article"))
+		if len(articles) == 0 {
+			continue
+		}
+		// The post goes under the heading of its day if the page named that day, and to the top of the
+		// timeline with a heading of its own if not.
+		selector := decoded[i+1].Selector
+		known := slices.Contains(strings.Split(composer.Get("days"), ","), strings.TrimSuffix(strings.TrimPrefix(selector, "#day-"), "-posts"))
+		if selector != "#"+html.TimelineID && !known {
+			d.t.Fatalf("the post was put in %v, which the page did not name", selector)
+		}
+		answer.Post = d.post(articles[0])
+	}
+	return answer
+}
+
+func (d *historyDriver) Comment(actor model.UserID, post model.PostID, token, body string) timelinetest.CommentAnswer {
+	fields := d.commentFields[actor]
+	if fields == nil {
+		fields = map[model.PostID]string{}
+		d.commentFields[actor] = fields
+	}
+	res := d.a.post(d.t, d.cookies[actor], "/comments", url.Values{"post": {post.String()}, "body": {body}, "token": {token}, "field": {fields[post]}}, true)
+	if o, ok := d.refused(res); ok {
+		return timelinetest.CommentAnswer{Outcome: o, Shown: text(parse(d.t, res.Body.String()))}
+	}
+
+	// The form that comes back is the one on the post of the comment that was made with the token, if
+	// one was, and the one it was sent from otherwise.
+	patch := d.a.patches(d.t, res)[0]
+	form := one(d.t, patch, func(n *nethtml.Node) bool { return n.Data == "form" && strings.HasSuffix(attr(n, "id"), "-comment-form") })
+	field, outcome := d.form(form)
+	fields[model.PostID(attr(one(d.t, form, named("post")), "value"))] = attr(one(d.t, form, named("field")), "value")
+
+	answer := timelinetest.CommentAnswer{Outcome: outcome, Field: &field}
+	if opened, comments, ok := d.comments(patch); ok {
+		answer.Opened, answer.OpenedPost, answer.Comments = true, opened, comments
+	}
+
+	// The answer to a comment made says so to screen readers, in an element named after the comment.
+	for _, n := range all(patch, func(n *nethtml.Node) bool { return strings.HasPrefix(attr(n, "id"), "announcement-") }) {
+		for _, c := range answer.Comments {
+			if "announcement-"+c.ID.String() == attr(n, "id") {
+				answer.Comment = c
+			}
+		}
+	}
+	return answer
+}
+
+func (d *historyDriver) Open(actor model.UserID, post model.PostID) timelinetest.CommentsAnswer {
+	res := d.a.post(d.t, d.cookies[actor], "/comments/open", url.Values{"post": {post.String()}}, true)
+	if o, ok := d.refused(res); ok {
+		return timelinetest.CommentsAnswer{Outcome: o, Shown: text(parse(d.t, res.Body.String()))}
+	}
+
+	opened, comments, ok := d.comments(d.a.patches(d.t, res)[0])
+	if !ok || opened != post {
+		d.t.Fatalf("opening the comments of %v opened %q", post, opened)
+	}
+	return timelinetest.CommentsAnswer{Comments: comments}
+}
+
+// refused is the outcome of an answer that is not patches, and whether it is one.
+func (d *historyDriver) refused(res *httptest.ResponseRecorder) (timelinetest.Outcome, bool) {
+	switch res.Code {
+	case http.StatusOK:
+		return timelinetest.Done, false
+	case http.StatusUnauthorized:
+		return timelinetest.Private, true
+	case http.StatusNotFound:
+		return timelinetest.NotFound, true
+	case http.StatusBadRequest:
+		return timelinetest.BadRequest, true
+	default:
+		d.t.Fatalf("answered %v: %v", res.Code, res.Body.String())
+		return 0, false
+	}
+}
+
+// form that came back: the text in its field, and the outcome its message says, if it has one.
+func (d *historyDriver) form(form *nethtml.Node) (string, timelinetest.Outcome) {
+	field := text(one(d.t, form, tag("textarea")))
+	messages := all(form, role("alert"))
+	switch {
+	case len(messages) == 0:
+		return field, timelinetest.Done
+	case strings.HasPrefix(text(messages[0]), "Your earlier try did go through"):
+		return field, timelinetest.Changed
+	default:
+		return field, timelinetest.Refused
+	}
+}
+
+// comments that the given patch opened, with the post they are of, and whether it opened any. The
+// count of the post's comments that comes with them has the same number, and none of them new.
+func (d *historyDriver) comments(patch *nethtml.Node) (model.PostID, []timelinetest.Comment, bool) {
+	lists := all(patch, func(n *nethtml.Node) bool {
+		return strings.HasPrefix(attr(n, "id"), "post-") && strings.HasSuffix(attr(n, "id"), "-comments")
+	})
+	if len(lists) == 0 {
+		return "", nil, false
+	}
+	if len(lists) > 1 {
+		d.t.Fatalf("the answer opened %v posts' comments", len(lists))
+	}
+	post := model.PostID(strings.TrimSuffix(strings.TrimPrefix(attr(lists[0], "id"), "post-"), "-comments"))
+
+	var comments []timelinetest.Comment
+	for _, li := range all(lists[0], hasAttr("data-comment")) {
+		comments = append(comments, timelinetest.Comment{
+			ID:     model.CommentID(attr(li, "data-comment")),
+			Author: text(all(li, tag("span"))[0]),
+			Body:   text(one(d.t, li, hasAttr("data-body"))),
+			Time:   attr(one(d.t, li, tag("time")), "datetime"),
+			New:    len(all(li, mark)) > 0,
+		})
+	}
+
+	count, fresh := d.summary(one(d.t, patch, id("post-"+post.String()+"-comments-summary")))
+	if count != len(comments) || fresh != 0 {
+		d.t.Fatalf("the post's count says %v comments with %v new, with %v comments opened", count, fresh, len(comments))
+	}
+	return post, comments, true
+}
+
+// days on the given page that have posts other than the given ones, with those posts.
+func (d *historyDriver) days(doc *nethtml.Node, leave map[model.PostID]bool) []timelinetest.Day {
+	var days []timelinetest.Day
+	for _, section := range all(doc, hasAttr("data-day")) {
+		t, err := time.Parse(time.DateOnly, attr(section, "data-day"))
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		heading := text(one(d.t, section, tag("h2")))
+		day := timelinetest.Day{
+			Date:      model.DateOf(t),
+			Heading:   heading != "",
+			Today:     strings.HasPrefix(heading, "Today "),
+			Yesterday: strings.HasPrefix(heading, "Yesterday "),
+		}
+		for _, article := range all(section, tag("article")) {
+			if !leave[model.PostID(attr(article, "data-post"))] {
+				day.Posts = append(day.Posts, d.post(article))
+			}
+		}
+		if len(day.Posts) > 0 {
+			days = append(days, day)
+		}
+	}
+	return days
+}
+
+// post as the given article shows it.
+func (d *historyDriver) post(article *nethtml.Node) timelinetest.Post {
+	postID := model.PostID(attr(article, "data-post"))
+	summary := one(d.t, article, id("post-"+postID.String()+"-comments-summary"))
+	p := timelinetest.Post{
+		ID:     postID,
+		Author: text(one(d.t, article, tag("h3"))),
+		Body:   text(all(article, hasAttr("data-body"))[0]),
+		Time:   attr(all(article, tag("time"))[0], "datetime"),
+	}
+	p.Comments, p.NewComments = d.summary(summary)
+	for _, m := range all(article, mark) {
+		if !slices.Contains(all(summary, mark), m) {
+			p.New = true
+		}
+	}
+	return p
+}
+
+// summary of a post's comments: how many it says there are, and how many of them new.
+func (d *historyDriver) summary(summary *nethtml.Node) (int, int) {
+	var count, fresh int
+	switch label := text(all(summary, tag("span"))[0]); label {
+	case "Comment":
+	case "1 comment":
+		count = 1
+	default:
+		if _, err := fmt.Sscanf(label, "%d comments", &count); err != nil {
+			d.t.Fatalf("the count of comments says %q", label)
+		}
+	}
+	for _, m := range all(summary, mark) {
+		if _, err := fmt.Sscanf(text(m), "%d new", &fresh); err != nil {
+			d.t.Fatalf("the mark on the count of comments says %q", text(m))
+		}
+	}
+	return count, fresh
+}
+
+// cursor that the given page's control for earlier posts sends, with what the page knows of its days, or
+// nil if it has no such control.
+func (d *historyDriver) cursor(doc *nethtml.Node) *timelinetest.Cursor {
+	form := one(d.t, doc, id("earlier"))
+	after := all(form, named("after"))
+	if len(after) == 0 {
+		return nil
+	}
+	c := &timelinetest.Cursor{After: attr(after[0], "value"), Days: attr(one(d.t, form, named("days")), "value")}
+	for _, section := range all(doc, hasAttr("data-day")) {
+		t, err := time.Parse(time.DateOnly, attr(section, "data-day"))
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		c.Shown = append(c.Shown, model.DateOf(t))
+	}
+	return c
+}
+
+// scratch page that has headings for the given days, with nothing under them, and a place for earlier
+// posts: what a page in a browser has that patches with earlier posts go into.
+func (d *historyDriver) scratch(days []model.Date) *nethtml.Node {
+	var b strings.Builder
+	b.WriteString(`<!doctype html><html><body><main><div id="timeline">`)
+	for _, day := range days {
+		fmt.Fprintf(&b, `<section data-day="%v"><h2 id="day-%v-heading"></h2><div id="day-%v-posts"></div></section>`, day, day, day)
+	}
+	b.WriteString(`</div><form id="earlier"></form></main><p id="announcement"></p></body></html>`)
+	return parse(d.t, b.String())
+}
+
+// apply the given patches to the given page, as Datastar does, and check that the page is still one. A
+// patch aimed at an element that the page does not have fails the test.
+func (d *historyDriver) apply(doc *nethtml.Node, patches []apphttp.DecodedPatch) {
+	for _, p := range patches {
+		body := &nethtml.Node{Type: nethtml.ElementNode, DataAtom: atom.Body, Data: "body"}
+		nodes, err := nethtml.ParseFragment(strings.NewReader(p.Elements), body)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+
+		if p.Selector == "" {
+			for _, n := range nodes {
+				if n.Type != nethtml.ElementNode {
+					continue
+				}
+				target := d.byID(doc, attr(n, "id"))
+				target.Parent.InsertBefore(n, target)
+				target.Parent.RemoveChild(target)
+			}
+			continue
+		}
+
+		target := d.byID(doc, strings.TrimPrefix(p.Selector, "#"))
+		switch p.Mode {
+		case "append":
+			for _, n := range nodes {
+				target.AppendChild(n)
+			}
+		case "prepend":
+			first := target.FirstChild
+			for _, n := range nodes {
+				target.InsertBefore(n, first)
+			}
+		case "inner":
+			for target.FirstChild != nil {
+				target.RemoveChild(target.FirstChild)
+			}
+			for _, n := range nodes {
+				target.AppendChild(n)
+			}
+		default:
+			d.t.Fatalf("a patch with the mode %q", p.Mode)
+		}
+	}
+	d.checkIDs(doc)
+}
+
+// byID finds the one element on the page with the given ID, or fails the test.
+func (d *historyDriver) byID(doc *nethtml.Node, elementID string) *nethtml.Node {
+	found := all(doc, id(elementID))
+	if len(found) != 1 {
+		d.t.Fatalf("a patch is aimed at #%v, and the page has %v of it", elementID, len(found))
+	}
+	return found[0]
+}
+
+// checkIDs on the given page: no ID is there twice, and no day has two sections.
+func (d *historyDriver) checkIDs(doc *nethtml.Node) {
+	seen := map[string]bool{}
+	for _, n := range all(doc, hasAttr("id")) {
+		if seen[attr(n, "id")] {
+			d.t.Fatalf("the page has #%v twice", attr(n, "id"))
+		}
+		seen[attr(n, "id")] = true
+	}
+	seen = map[string]bool{}
+	for _, n := range all(doc, hasAttr("data-day")) {
+		if seen[attr(n, "data-day")] {
+			d.t.Fatalf("the page has the day %v twice", attr(n, "data-day"))
+		}
+		seen[attr(n, "data-day")] = true
+	}
+}
+
 func FuzzTimeline(f *testing.F) {
 	f.Add("Cake in the kitchen.", "2031-03-14", "", "", "q6urq6urq6urq6urq6urqw")
 	f.Add("", "", "", "", "")
@@ -2202,6 +2627,13 @@ func newApp(t *testing.T, opts ...func(*config)) *app {
 
 	a := &app{db: sqlitetest.NewDatabase(t), sm: scs.New(), clock: &clock{t: base}, logs: &logs{}}
 	a.store = &store{Database: a.db, fail: map[string]error{}}
+	a.route(group, c.extra, 0)
+	return a
+}
+
+// route the app's handler for the given group, with the given extra and the given number of posts on a
+// page of the timeline.
+func (a *app) route(group model.Group, extra func(signedIn bool) Node, pageSize int) {
 	log := slog.New(slog.NewTextHandler(a.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	// The session's user is looked up in the real database, and everything after that in the store.
@@ -2223,17 +2655,21 @@ func newApp(t *testing.T, opts ...func(*config)) *app {
 		r.NotFound(gluehttp.NotFound(html.Page))
 
 		r.Group(func(r *gluehttp.Router) {
-			apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{Group: group, Now: a.clock.Now, Random: rand.NewChaCha8([32]byte{}), Extra: c.extra})(r)
+			apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{
+				Group:            group,
+				Now:              a.clock.Now,
+				Random:           rand.NewChaCha8([32]byte{}),
+				TimelinePageSize: pageSize,
+				Extra:            extra,
+			})(r)
 		})
 	})
 	a.handler = r.Mux
-
-	return a
 }
 
 // signIn the given user by putting them in a session of the app's session manager, and return the
 // session's cookie.
-func (a *app) signIn(t *testing.T, user model.User) *http.Cookie {
+func (a *app) signIn(t testing.TB, user model.User) *http.Cookie {
 	t.Helper()
 
 	ctx, err := a.sm.Load(t.Context(), "")
@@ -2245,7 +2681,7 @@ func (a *app) signIn(t *testing.T, user model.User) *http.Cookie {
 	return &http.Cookie{Name: a.sm.Cookie.Name, Value: token}
 }
 
-func (a *app) get(t *testing.T, cookie *http.Cookie, path string) *httptest.ResponseRecorder {
+func (a *app) get(t testing.TB, cookie *http.Cookie, path string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -2259,7 +2695,7 @@ func (a *app) get(t *testing.T, cookie *http.Cookie, path string) *httptest.Resp
 
 // post the given form, as Datastar does or as a browser does by itself. A form to post or to comment
 // carries a new token, as one from the page does, unless the test gives it one or an empty one.
-func (a *app) post(t *testing.T, cookie *http.Cookie, path string, form url.Values, datastar bool) *httptest.ResponseRecorder {
+func (a *app) post(t testing.TB, cookie *http.Cookie, path string, form url.Values, datastar bool) *httptest.ResponseRecorder {
 	t.Helper()
 
 	if (path == "/posts" || path == "/comments") && !form.Has("token") {
@@ -2284,7 +2720,7 @@ func (a *app) post(t *testing.T, cookie *http.Cookie, path string, form url.Valu
 }
 
 // decode the patches in the given answer to Datastar.
-func (a *app) decode(t *testing.T, res *httptest.ResponseRecorder) []apphttp.DecodedPatch {
+func (a *app) decode(t testing.TB, res *httptest.ResponseRecorder) []apphttp.DecodedPatch {
 	t.Helper()
 
 	is.Equal(t, "text/event-stream", res.Header().Get("Content-Type"))
@@ -2295,7 +2731,7 @@ func (a *app) decode(t *testing.T, res *httptest.ResponseRecorder) []apphttp.Dec
 }
 
 // patches in the given answer to Datastar, each with its elements parsed under a node of its own.
-func (a *app) patches(t *testing.T, res *httptest.ResponseRecorder) []*nethtml.Node {
+func (a *app) patches(t testing.TB, res *httptest.ResponseRecorder) []*nethtml.Node {
 	t.Helper()
 
 	var patches []*nethtml.Node
@@ -2376,7 +2812,7 @@ func newToken(t testing.TB) string {
 	return token.String()
 }
 
-func parse(t *testing.T, page string) *nethtml.Node {
+func parse(t testing.TB, page string) *nethtml.Node {
 	t.Helper()
 
 	doc, err := nethtml.Parse(strings.NewReader(page))
@@ -2396,7 +2832,7 @@ func all(n *nethtml.Node, match func(*nethtml.Node) bool) []*nethtml.Node {
 }
 
 // one element under the given node that matches, and no more.
-func one(t *testing.T, n *nethtml.Node, match func(*nethtml.Node) bool) *nethtml.Node {
+func one(t testing.TB, n *nethtml.Node, match func(*nethtml.Node) bool) *nethtml.Node {
 	t.Helper()
 
 	found := all(n, match)

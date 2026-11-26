@@ -121,7 +121,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 
 		// The look at the timeline comes last, so that nothing after it can fail and leave the person
 		// with the marks used up and no page to see them on.
-		timeline, err := svc.GetTimeline(props.Ctx, user.ID, "", 0)
+		timeline, err := svc.GetTimeline(props.Ctx, user.ID, "", opts.TimelinePageSize)
 		if err != nil {
 			return failed(props, err, http.StatusOK)
 		}
@@ -255,7 +255,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			return needsScript(props)
 		}
 
-		timeline, err := svc.GetTimeline(props.Ctx, user.ID, after.String(), 0)
+		timeline, err := svc.GetTimeline(props.Ctx, user.ID, after.String(), opts.TimelinePageSize)
 		if err != nil {
 			return failed(props, err, http.StatusUnauthorized)
 		}

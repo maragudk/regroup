@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"app/servicetest"
 	"app/sqlite"
 	"app/sqlitetest"
+	"app/timelinetest"
 )
 
 // base is not today, so that a test can tell the clock it gives from the real one.
@@ -479,6 +481,162 @@ func TestFat_GetTimeline(t *testing.T) {
 		is.True(t, timeline.Days[0].Posts[0].New)
 		is.Equal(t, 0, timeline.Days[0].Posts[0].NewComments)
 	})
+}
+
+func TestFat_history(t *testing.T) {
+	t.Run("shows everyone the timeline, the marks, and the comments the rules say, after any sequence of actions by several people", func(t *testing.T) {
+		timelinetest.Test(t, &historyDriver{db: sqlitetest.NewDatabase(t)}, 50)
+	})
+}
+
+// historyDriver runs a history against the business logic on a real database.
+type historyDriver struct {
+	t        testing.TB
+	db       *sqlite.Database
+	fat      *service.Fat
+	clock    *clock
+	zone     *time.Location
+	pageSize int
+}
+
+func (d *historyDriver) Reset(t testing.TB, zone *time.Location, now time.Time, pageSize int) {
+	d.t, d.zone, d.pageSize = t, zone, pageSize
+	for _, table := range []string{"comments", "posts", "users", "accounts"} {
+		if err := d.db.H.Exec(t.Context(), "delete from "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	d.clock = &clock{t: now}
+	d.fat = service.NewFat(service.NewFatOptions{})
+	service.CreatePost(d.fat, d.db, d.clock.Now)
+	service.CreateComment(d.fat, d.db, d.clock.Now)
+	service.GetTimeline(d.fat, d.db, d.clock.Now, model.Group{Name: "The Loft", TimeZone: zone})
+	service.GetComments(d.fat, d.db)
+	service.GetMembers(d.fat, d.db)
+}
+
+func (d *historyDriver) Join(name string) model.UserID {
+	return sqlitetest.CreateUser(d.t, d.db, name).ID
+}
+
+func (d *historyDriver) Deactivate(id model.UserID) {
+	sqlitetest.DeactivateUser(d.t, d.db, id)
+}
+
+func (d *historyDriver) SetClock(now time.Time) {
+	d.clock.t = now
+}
+
+func (d *historyDriver) Look(actor model.UserID) timelinetest.PageAnswer {
+	members, err := d.fat.GetMembers(d.t.Context(), actor)
+	if err != nil {
+		return timelinetest.PageAnswer{Outcome: d.outcome(err), Shown: fmt.Sprint(members)}
+	}
+	answer := d.page(actor, "")
+	answer.Page.Members = members
+	return answer
+}
+
+func (d *historyDriver) Earlier(actor model.UserID, c timelinetest.Cursor) timelinetest.PageAnswer {
+	return d.page(actor, c.After)
+}
+
+func (d *historyDriver) Walk(actor model.UserID) ([]timelinetest.PageAnswer, timelinetest.Outcome) {
+	// The cursor after a post at the end of time, by the last order there can be, gets every post.
+	top := model.TimelineCursor{Created: model.Time{T: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)}, Seq: math.MaxInt64}
+	var pages []timelinetest.PageAnswer
+	for cursor := top.String(); ; {
+		answer := d.page(actor, cursor)
+		if answer.Outcome != timelinetest.Done {
+			return pages, answer.Outcome
+		}
+		pages = append(pages, answer)
+		if answer.Page.Next == nil {
+			return pages, timelinetest.Done
+		}
+		cursor = answer.Page.Next.After
+	}
+}
+
+// page of the timeline after the given cursor, which is the first page if it is empty.
+func (d *historyDriver) page(actor model.UserID, cursor string) timelinetest.PageAnswer {
+	timeline, err := d.fat.GetTimeline(d.t.Context(), actor, cursor, d.pageSize)
+	if err != nil {
+		return timelinetest.PageAnswer{Outcome: d.outcome(err), Shown: fmt.Sprint(timeline)}
+	}
+
+	page := timelinetest.Page{Members: -1}
+	for _, day := range timeline.Days {
+		shown := timelinetest.Day{Date: day.Date, Heading: true, Today: day.Today, Yesterday: day.Yesterday}
+		for _, p := range day.Posts {
+			shown.Posts = append(shown.Posts, timelinetest.Post{
+				ID: p.ID, Author: p.AuthorName, Body: p.Body, Time: d.time(p.Created),
+				New: p.New, Comments: p.Comments, NewComments: p.NewComments,
+			})
+		}
+		page.Days = append(page.Days, shown)
+	}
+	if timeline.Next != "" {
+		page.Next = &timelinetest.Cursor{After: timeline.Next}
+	}
+	return timelinetest.PageAnswer{Page: page}
+}
+
+func (d *historyDriver) Post(actor model.UserID, token, body string) timelinetest.PostAnswer {
+	p, err := d.fat.CreatePost(d.t.Context(), actor, token, body)
+	return timelinetest.PostAnswer{
+		Outcome: d.outcome(err),
+		Post:    timelinetest.Post{ID: p.ID, Author: d.name(p.AuthorID), Body: p.Body, Time: d.time(p.Created)},
+		Shown:   fmt.Sprint(p),
+	}
+}
+
+func (d *historyDriver) Comment(actor model.UserID, post model.PostID, token, body string) timelinetest.CommentAnswer {
+	c, err := d.fat.CreateComment(d.t.Context(), actor, post, token, body)
+	return timelinetest.CommentAnswer{
+		Outcome: d.outcome(err),
+		Comment: timelinetest.Comment{ID: c.ID, Author: d.name(c.AuthorID), Body: c.Body, Time: d.time(c.Created)},
+		Shown:   fmt.Sprint(c),
+	}
+}
+
+func (d *historyDriver) Open(actor model.UserID, post model.PostID) timelinetest.CommentsAnswer {
+	comments, err := d.fat.GetComments(d.t.Context(), actor, post)
+	answer := timelinetest.CommentsAnswer{Outcome: d.outcome(err), Shown: fmt.Sprint(comments)}
+	for _, c := range comments {
+		answer.Comments = append(answer.Comments, timelinetest.Comment{ID: c.ID, Author: c.AuthorName, Body: c.Body, Time: d.time(c.Created), New: c.New})
+	}
+	return answer
+}
+
+// outcome of the given error, which fails the test if it is not one.
+func (d *historyDriver) outcome(err error) timelinetest.Outcome {
+	o, ok := timelinetest.OutcomeOf(err)
+	if !ok {
+		d.t.Fatal(err)
+	}
+	return o
+}
+
+// name of the given person, or nothing if there is no person.
+func (d *historyDriver) name(id model.UserID) string {
+	if id == "" {
+		return ""
+	}
+	u, err := d.db.GetUser(d.t.Context(), id)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	return u.Name
+}
+
+// time in the group's time zone, as a reader is shown it, or nothing for the zero time.
+func (d *historyDriver) time(t model.Time) string {
+	if t.T.IsZero() {
+		return ""
+	}
+	return t.T.In(d.zone).Format(time.RFC3339)
 }
 
 func TestFat_GetComments(t *testing.T) {
