@@ -6,11 +6,7 @@ import (
 
 func CSP(allowUnsafeInline, allowUnsafeEval bool) func(*httph.ContentSecurityPolicyOptions) {
 	return func(opts *httph.ContentSecurityPolicyOptions) {
-		opts.ConnectSrc = "'self' https://cdn.usefathom.com"
-
-		opts.ImgSrc = "'self' https://cdn.usefathom.com"
-
-		scriptSrc := "'self' https://cdn.usefathom.com"
+		scriptSrc := "'self'"
 		if allowUnsafeInline {
 			scriptSrc += " 'unsafe-inline'"
 		}

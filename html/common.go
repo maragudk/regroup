@@ -35,7 +35,6 @@ func Page(props PageProps, body ...Node) Node {
 			Link(Rel("stylesheet"), Href(appCSSPath)),
 			Script(Type("module"), Src(datastarJSPath), Defer()),
 			Script(Src(appJSPath), Defer()),
-			Script(Src("https://cdn.usefathom.com/script.js"), Data("site", "123"), Defer()),
 			html.FavIcons("app"),
 		},
 		HTMLAttrs: Group{Class("scheme-light dark:scheme-dark")},
