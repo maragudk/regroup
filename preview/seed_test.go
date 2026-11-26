@@ -2,6 +2,7 @@ package preview_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,37 @@ func TestSeed(t *testing.T) {
 		is.Equal(t, 14, len(names))
 		for _, name := range []string{"Markus", "Signe", "Thomas", "Amira", "Jonas", "Karen"} {
 			is.True(t, slices.Contains(names, name), name)
+		}
+	})
+
+	t.Run("gives Markus the admin role, Signe and Thomas the moderator role, and everyone else the member role, each with an address at example.com, invited by Markus", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		_, err := preview.Seed(t.Context(), db, now, copenhagen)
+		is.NotError(t, err)
+
+		var users []model.User
+		is.NotError(t, db.H.Select(t.Context(), &users, "select * from users"))
+		is.Equal(t, 14, len(users))
+		var markus model.UserID
+		for _, u := range users {
+			if u.Name == "Markus" {
+				markus = u.ID
+			}
+		}
+		for _, u := range users {
+			expected := map[string]model.Role{"Markus": model.RoleAdmin, "Signe": model.RoleModerator, "Thomas": model.RoleModerator}[u.Name]
+			if expected == "" {
+				expected = model.RoleMember
+			}
+			is.Equal(t, expected, u.Role, u.Name)
+			is.Equal(t, model.EmailAddress(strings.ToLower(u.Name)+"@example.com"), u.Email)
+			_, err := model.ParseEmailAddress(u.Email.String())
+			is.NotError(t, err)
+			if u.Name == "Markus" {
+				is.True(t, u.InvitedBy == nil)
+			} else {
+				is.Equal(t, markus, *u.InvitedBy)
+			}
 		}
 	})
 
