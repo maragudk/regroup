@@ -1,9 +1,13 @@
 package html_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+	gluehttp "maragu.dev/glue/http"
 	. "maragu.dev/gomponents"
 	. "maragu.dev/gomponents/html"
 	"maragu.dev/httph"
@@ -74,6 +80,67 @@ func TestPage(t *testing.T) {
 		page := render(t, html.Page(html.PageProps{Title: "Test"}))
 
 		is.True(t, strings.Contains(page, `<meta name="robots" content="noindex">`), page)
+	})
+}
+
+// TestFavicon guards the app's icon: a plain square in the primary orange, as SVG for the pages to link
+// to, and as an ICO file at the path a browser asks for when a page names none.
+func TestFavicon(t *testing.T) {
+	// orange is Tailwind's orange 500, oklch(70.5% 0.213 47.604), in sRGB, as Tailwind gives it too.
+	orange := color.NRGBA{R: 0xff, G: 0x69, B: 0x00, A: 0xff}
+
+	t.Run("every page links to the SVG icon", func(t *testing.T) {
+		for _, page := range []Node{
+			html.Page(html.PageProps{Title: "Test"}),
+			html.GroupPage(html.GroupPageProps{GroupName: "The Loft"}),
+			html.PrivatePage(html.PrivatePageProps{}),
+		} {
+			is.True(t, strings.Contains(render(t, page), `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`))
+		}
+	})
+
+	t.Run("the SVG icon is a plain square in orange", func(t *testing.T) {
+		svg, err := os.ReadFile("../public/favicon.svg")
+		is.NotError(t, err)
+		is.Equal(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="#ff6900"/></svg>`+"\n", string(svg))
+	})
+
+	t.Run("the ICO icon is one square image, every pixel of it orange", func(t *testing.T) {
+		ico, err := os.ReadFile("../public/favicon.ico")
+		is.NotError(t, err)
+
+		// The header says it is an icon with one image, and where that image is.
+		is.EqualSlice(t, []byte{0, 0, 1, 0, 1, 0}, ico[:6], "the header of an icon with one image")
+		size, offset := binary.LittleEndian.Uint32(ico[14:18]), binary.LittleEndian.Uint32(ico[18:22])
+		is.Equal(t, len(ico), int(offset+size))
+
+		img, err := png.Decode(bytes.NewReader(ico[offset:]))
+		is.NotError(t, err)
+		bounds := img.Bounds()
+		is.Equal(t, bounds.Dx(), bounds.Dy())
+		is.Equal(t, int(ico[6]), bounds.Dx())
+		is.Equal(t, int(ico[7]), bounds.Dy())
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				is.Equal(t, orange, color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA))
+			}
+		}
+	})
+
+	t.Run("both are served from the app's own public files, at the root", func(t *testing.T) {
+		t.Chdir("..")
+		mux := chi.NewMux()
+		gluehttp.Static(mux)
+
+		for _, path := range []string{"/favicon.svg", "/favicon.ico"} {
+			res := httptest.NewRecorder()
+			mux.ServeHTTP(res, httptest.NewRequest(http.MethodGet, path, nil))
+			is.Equal(t, http.StatusOK, res.Code, path)
+
+			data, err := os.ReadFile(filepath.Join("public", path))
+			is.NotError(t, err)
+			is.True(t, bytes.Equal(data, res.Body.Bytes()), path)
+		}
 	})
 }
 

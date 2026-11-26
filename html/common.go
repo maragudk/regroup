@@ -55,6 +55,9 @@ func document(props PageProps, body ...Node) Node {
 		Head: Group{
 			// The group is private, so no page is for a search engine.
 			Meta(Name("robots"), Content("noindex")),
+			// The icon is a plain square in the primary orange. The same square is at /favicon.ico, for
+			// whatever asks there without reading this.
+			Link(Rel("icon"), Href("/favicon.svg"), Type("image/svg+xml")),
 			Link(Rel("preload"), Href("/styles/fonts/Fraunces.ttf"), As("font"), Type("font/ttf"), CrossOrigin("anonymous")),
 			Link(Rel("preload"), Href("/styles/fonts/SourceSans3-Regular.woff2"), As("font"), Type("font/woff2"), CrossOrigin("anonymous")),
 			Link(Rel("stylesheet"), Href(appCSSPath)),
