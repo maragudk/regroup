@@ -168,6 +168,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 				Days:    days,
 				Fresh:   echo(props.R.PostFormValue("field")),
 				Token:   token(),
+				Focus:   true,
 			})})
 		}
 
@@ -195,9 +196,10 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 					Days:    days,
 					Fresh:   echo(props.R.PostFormValue("field")),
 					Token:   token(),
+					Focus:   true,
 				})
 			}
-			return Group{html.Composer(html.ComposerProps{Days: days, Fresh: post.ID.String(), Token: token()}), posted(post)}
+			return Group{html.Composer(html.ComposerProps{Days: days, Fresh: post.ID.String(), Token: token(), Focus: true}), posted(post)}
 		}
 
 		now := now()
@@ -357,6 +359,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 				Message: message,
 				Fresh:   echo(props.R.PostFormValue("field")),
 				Token:   token(),
+				Focus:   true,
 			})})
 		}
 
@@ -381,12 +384,13 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 				Message: resentComment,
 				Fresh:   echo(props.R.PostFormValue("field")),
 				Token:   token(),
+				Focus:   true,
 			}))
 		}
 
 		// A comment sent again gets what it got the first time, which is on the post it was made on.
 		return comments(props, user, comment.PostID,
-			html.CommentForm(html.CommentFormProps{PostID: comment.PostID, Fresh: comment.ID.String(), Token: token()}),
+			html.CommentForm(html.CommentFormProps{PostID: comment.PostID, Fresh: comment.ID.String(), Token: token(), Focus: true}),
 			html.Announcement(comment.ID.String(), "Your comment was added."),
 		)
 	})

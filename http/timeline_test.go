@@ -356,7 +356,7 @@ func TestTimeline_post(t *testing.T) {
 		is.EqualSlice(t, []string{"Today Friday 14 March"}, texts(all(doc, tag("h2"))))
 	})
 
-	t.Run("says to screen readers that the post is on the timeline, and moves no focus", func(t *testing.T) {
+	t.Run("says to screen readers that the post is on the timeline, and gives the focus back to the composer's field", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 		cookie := a.signIn(t, signe)
@@ -373,13 +373,27 @@ func TestTimeline_post(t *testing.T) {
 				}
 			}
 			is.Equal(t, 1, len(all(patches[0], id("announcement-"+attr(article, "data-post")))), days)
-			for _, p := range patches {
-				is.Equal(t, 0, len(all(p, hasAttr("data-init"))))
-			}
+			is.EqualSlice(t, []string{"textarea"}, focusTakers(patches), days)
 		}
 
 		patches := a.patches(t, a.post(t, cookie, "/posts", url.Values{"body": {" "}}, true))
 		is.Equal(t, 0, len(all(patches[0], id("announcement"))))
+	})
+
+	t.Run("gives the focus to the composer's field when what was written is refused, or was sent before with other text", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		cookie := a.signIn(t, signe)
+		sent := newToken(t)
+		a.post(t, cookie, "/posts", url.Values{"body": {"Cake."}, "token": {sent}}, true)
+
+		for _, form := range []url.Values{{"body": {" "}}, {"body": {"Cake!"}, "token": {sent}}} {
+			patches := a.patches(t, a.post(t, cookie, "/posts", form, true))
+			is.EqualSlice(t, []string{"textarea"}, focusTakers(patches))
+			is.Equal(t, "composer-body", attr(one(t, patches[0], hasAttr("data-init")), "id"))
+		}
+
+		is.Equal(t, 0, len(all(parse(t, a.get(t, cookie, "/").Body.String()), hasAttr("data-init"))))
 	})
 
 	t.Run("gives the composer a field of a new identity after a post, so that a page does not keep what was posted in it", func(t *testing.T) {
@@ -1346,6 +1360,25 @@ func TestTimeline_comments(t *testing.T) {
 			is.Equal(t, 0, a.count(t, "comments"))
 		})
 	}
+
+	t.Run("gives the focus to the post's comment field after a comment, after a refusal, and after other text sent before, and not when comments are only opened", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
+		cookie := a.signIn(t, signe)
+		sent := newToken(t)
+
+		for _, form := range []url.Values{{"body": {"Yes."}, "token": {sent}}, {"body": {" "}}, {"body": {"Yes!"}, "token": {sent}}} {
+			form.Set("post", post.ID.String())
+			patches := a.patches(t, a.post(t, cookie, "/comments", form, true))
+			is.EqualSlice(t, []string{"textarea"}, focusTakers(patches))
+			field := one(t, patches[0], hasAttr("data-init"))
+			is.True(t, strings.HasPrefix(attr(field, "id"), "post-"+post.ID.String()+"-comment-body"), attr(field, "id"))
+		}
+
+		patches := a.patches(t, a.post(t, cookie, "/comments/open", url.Values{"post": {post.ID.String()}}, true))
+		is.Equal(t, 0, len(focusTakers(patches)))
+	})
 
 	t.Run("says to screen readers that the comment was added, and nothing when comments are only opened", func(t *testing.T) {
 		a := newApp(t)
@@ -2318,6 +2351,20 @@ func announced(t *testing.T, patches []*nethtml.Node) string {
 	is.Equal(t, "polite", attr(regions[0], "aria-live"))
 	said := one(t, regions[0], func(n *nethtml.Node) bool { return strings.HasPrefix(attr(n, "id"), "announcement-") })
 	return text(said)
+}
+
+// focusTakers in the given patches: the tags of the elements that take the focus when they are put on
+// the page.
+func focusTakers(patches []*nethtml.Node) []string {
+	var tags []string
+	for _, p := range patches {
+		for _, n := range all(p, hasAttr("data-init")) {
+			if strings.Contains(attr(n, "data-init"), "focus()") {
+				tags = append(tags, n.Data)
+			}
+		}
+	}
+	return tags
 }
 
 // newToken for a form, as the page has.

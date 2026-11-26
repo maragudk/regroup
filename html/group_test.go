@@ -290,6 +290,51 @@ func TestComposer(t *testing.T) {
 		form = render(t, html.Composer(html.ComposerProps{}))
 		is.True(t, !strings.Contains(form, "aria-invalid") && !strings.Contains(form, "role=\"alert\""), form)
 	})
+
+	t.Run("has the field take the keyboard focus when it is put on the page, if asked to, unless the focus is elsewhere", func(t *testing.T) {
+		field := textareaOf(t, html.Composer(html.ComposerProps{Focus: true, Token: "q6urq6urq6urq6urq6urqw"}))
+		// The token is in the expression so that it is a new one each time, which Datastar runs again.
+		is.Equal(t, "'q6urq6urq6urq6urq6urqw' && (document.activeElement === document.body || el.form.contains(document.activeElement)) && el.focus()", attribute(field, "data-init"))
+
+		other := textareaOf(t, html.Composer(html.ComposerProps{Focus: true, Token: "AAAAAAAAAAAAAAAAAAAAAA", Message: "Refused."}))
+		is.True(t, attribute(field, "data-init") != attribute(other, "data-init"))
+	})
+
+	t.Run("has the field take no focus otherwise", func(t *testing.T) {
+		form := render(t, html.Composer(html.ComposerProps{Token: "q6urq6urq6urq6urq6urqw", Message: "Refused."}))
+		is.True(t, !strings.Contains(form, "data-init"), form)
+	})
+}
+
+func TestCommentForm(t *testing.T) {
+	t.Run("has the field take the keyboard focus when it is put on the page, if asked to, unless the focus is elsewhere", func(t *testing.T) {
+		field := textareaOf(t, html.CommentForm(html.CommentFormProps{PostID: "p_1", Focus: true, Token: "q6urq6urq6urq6urq6urqw"}))
+		is.Equal(t, "'q6urq6urq6urq6urq6urqw' && (document.activeElement === document.body || el.form.contains(document.activeElement)) && el.focus()", attribute(field, "data-init"))
+
+		other := textareaOf(t, html.CommentForm(html.CommentFormProps{PostID: "p_1", Focus: true, Token: "AAAAAAAAAAAAAAAAAAAAAA"}))
+		is.True(t, attribute(field, "data-init") != attribute(other, "data-init"))
+	})
+
+	t.Run("has the field take no focus otherwise", func(t *testing.T) {
+		form := render(t, html.CommentForm(html.CommentFormProps{PostID: "p_1", Token: "q6urq6urq6urq6urq6urqw", Message: "Refused."}))
+		is.True(t, !strings.Contains(form, "data-init"), form)
+	})
+}
+
+// textareaOf the given form, which has one.
+func textareaOf(t *testing.T, form Node) *nethtml.Node {
+	t.Helper()
+
+	doc, err := nethtml.Parse(strings.NewReader(render(t, form)))
+	is.NotError(t, err)
+	var fields []*nethtml.Node
+	for n := range doc.Descendants() {
+		if n.Type == nethtml.ElementNode && n.Data == "textarea" {
+			fields = append(fields, n)
+		}
+	}
+	is.Equal(t, 1, len(fields))
+	return fields[0]
 }
 
 func TestPrivatePage(t *testing.T) {
