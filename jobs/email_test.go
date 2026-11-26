@@ -3,93 +3,77 @@ package jobs_test
 import (
 	"context"
 	"encoding/json/v2"
-	"log/slog"
 	"testing"
 
 	"maragu.dev/errors"
-	"maragu.dev/glue/email"
 	"maragu.dev/is"
 
 	"app/jobs"
 	"app/model"
 )
 
-type senderStub struct {
-	err  error
-	opts email.SendOptions
+type emailsStub struct {
+	err        error
+	address    model.EmailAddress
+	invitation model.InvitationID
 }
 
-func (s *senderStub) SendTransactional(ctx context.Context, opts email.SendOptions) error {
-	s.opts = opts
+func (s *emailsStub) SendSignInLink(ctx context.Context, address model.EmailAddress) error {
+	s.address = address
 	return s.err
 }
 
-func TestSendEmail(t *testing.T) {
-	t.Run("should send a login email with the recipient, subject, preheader, template, and keywords", func(t *testing.T) {
-		sender := &senderStub{}
+func (s *emailsStub) SendInvitation(ctx context.Context, id model.InvitationID) error {
+	s.invitation = id
+	return s.err
+}
 
-		is.NotError(t, jobs.SendEmail(newLog(), sender)(t.Context(), marshalJobData(t, model.SendEmailJobData{
-			Type:     "login",
-			Name:     "Me",
-			Email:    "me@example.com",
-			Keywords: model.Keywords{"token": "123"},
-		})))
+func TestSendSignInLink(t *testing.T) {
+	t.Run("should hand the address to the sender", func(t *testing.T) {
+		s := &emailsStub{}
 
-		is.Equal(t, "Me", sender.opts.ToName)
-		is.Equal(t, model.EmailAddress("me@example.com"), sender.opts.To)
-		is.Equal(t, "Welcome, Me!", sender.opts.Subject)
-		is.Equal(t, "Click the link to log in.", sender.opts.Preheader)
-		is.Equal(t, "login", sender.opts.Template)
-		is.Equal(t, "123", sender.opts.Keywords["token"])
+		is.NotError(t, jobs.SendSignInLink(s)(t.Context(), marshal(t, model.SendSignInLinkJobData{Email: "signe@example.com"})))
+		is.Equal(t, model.EmailAddress("signe@example.com"), s.address)
 	})
 
-	t.Run("should leave the reply-to unset, so the sender uses the one it is configured with", func(t *testing.T) {
-		sender := &senderStub{}
+	t.Run("should return the error if the sender fails, so that the job is tried again", func(t *testing.T) {
+		s := &emailsStub{err: errors.New("no")}
 
-		is.NotError(t, jobs.SendEmail(newLog(), sender)(t.Context(), marshalJobData(t, model.SendEmailJobData{
-			Type:  "login",
-			Name:  "Me",
-			Email: "me@example.com",
-		})))
-
-		is.Equal(t, model.EmailAddress(""), sender.opts.ReplyTo)
-		is.Equal(t, "", sender.opts.ReplyToName)
-	})
-
-	t.Run("should return the error if the sender fails", func(t *testing.T) {
-		sendErr := errors.New("no")
-		sender := &senderStub{err: sendErr}
-
-		err := jobs.SendEmail(newLog(), sender)(t.Context(), marshalJobData(t, model.SendEmailJobData{
-			Type:  "login",
-			Name:  "Me",
-			Email: "me@example.com",
-		}))
-		is.Error(t, sendErr, err)
-	})
-
-	t.Run("should panic on an unknown email type", func(t *testing.T) {
-		defer func() {
-			is.Equal(t, "unknown email type nope", recover())
-		}()
-
-		_ = jobs.SendEmail(newLog(), &senderStub{})(t.Context(), marshalJobData(t, model.SendEmailJobData{
-			Type:  "nope",
-			Email: "me@example.com",
-		}))
-
-		t.Fatal("did not panic")
+		err := jobs.SendSignInLink(s)(t.Context(), marshal(t, model.SendSignInLinkJobData{Email: "signe@example.com"}))
+		is.Error(t, s.err, err)
 	})
 }
 
-func newLog() *slog.Logger {
-	return slog.New(slog.DiscardHandler)
+func TestSendInvitation(t *testing.T) {
+	t.Run("should hand the invitation to the sender", func(t *testing.T) {
+		s := &emailsStub{}
+
+		is.NotError(t, jobs.SendInvitation(s)(t.Context(), marshal(t, model.SendInvitationJobData{InvitationID: "i_1"})))
+		is.Equal(t, model.InvitationID("i_1"), s.invitation)
+	})
+
+	t.Run("should return the error if the sender fails, so that the job is tried again", func(t *testing.T) {
+		s := &emailsStub{err: errors.New("no")}
+
+		err := jobs.SendInvitation(s)(t.Context(), marshal(t, model.SendInvitationJobData{InvitationID: "i_1"}))
+		is.Error(t, s.err, err)
+	})
 }
 
-func marshalJobData(t *testing.T, jd model.SendEmailJobData) []byte {
+func TestFuncs(t *testing.T) {
+	t.Run("should have a function for each job the app creates", func(t *testing.T) {
+		funcs := jobs.Funcs(jobs.RegisterOpts{Emails: &emailsStub{}})
+
+		is.Equal(t, 2, len(funcs))
+		is.True(t, funcs[model.JobNameSendSignInLink] != nil)
+		is.True(t, funcs[model.JobNameSendInvitation] != nil)
+	})
+}
+
+func marshal(t *testing.T, data any) []byte {
 	t.Helper()
 
-	m, err := json.Marshal(jd)
+	m, err := json.Marshal(data)
 	is.NotError(t, err)
 	return m
 }

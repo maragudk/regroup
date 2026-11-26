@@ -46,7 +46,7 @@ func TestRoutes(t *testing.T) {
 		log := slog.New(slog.DiscardHandler)
 
 		fat := service.NewFat(service.NewFatOptions{})
-		service.Setup(fat, nil, db, nil, now, group)
+		service.Setup(fat, nil, db, nil, now, rand.Reader, group, "")
 		_, err = fat.CreatePost(t.Context(), signe.ID, "q6urq6urq6urq6urq6urqw", "Cake in the kitchen.")
 		is.NotError(t, err)
 
@@ -54,7 +54,7 @@ func TestRoutes(t *testing.T) {
 		r := gluehttp.NewRouter(gluehttp.NewRouterOpts{SM: sm})
 		r.Use(sm.LoadAndSave, gluehttp.Authenticate(log, sm, db))
 		apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{Group: group, Now: now, Random: rand.Reader, Extra: preview.PeopleLink})(r)
-		preview.Routes(r, log, db)
+		preview.Routes(r, log, db, preview.NewOutbox(log, now))
 		server := httptest.NewServer(r.Mux)
 		t.Cleanup(server.Close)
 
@@ -90,7 +90,7 @@ func TestRoutes(t *testing.T) {
 		sm := scs.New()
 		r := gluehttp.NewRouter(gluehttp.NewRouterOpts{SM: sm})
 		r.Use(sm.LoadAndSave, gluehttp.Authenticate(slog.New(slog.DiscardHandler), sm, db))
-		preview.Routes(r, slog.New(slog.DiscardHandler), db)
+		preview.Routes(r, slog.New(slog.DiscardHandler), db, preview.NewOutbox(slog.New(slog.DiscardHandler), time.Now))
 		r.Mux.Get("/whoami", func(w http.ResponseWriter, r *http.Request) {
 			if id := gluehttp.GetUserIDFromContext(r.Context()); id != nil {
 				_, _ = io.WriteString(w, id.String())
@@ -132,7 +132,7 @@ func TestRoutes(t *testing.T) {
 		sm := scs.New()
 		r := gluehttp.NewRouter(gluehttp.NewRouterOpts{SM: sm})
 		r.Use(sm.LoadAndSave)
-		preview.Routes(r, slog.New(slog.DiscardHandler), db)
+		preview.Routes(r, slog.New(slog.DiscardHandler), db, preview.NewOutbox(slog.New(slog.DiscardHandler), time.Now))
 
 		req := httptest.NewRequest(http.MethodPost, "/preview/sign-in", strings.NewReader(url.Values{"user": {string(model.UserID("u_nope"))}}.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")

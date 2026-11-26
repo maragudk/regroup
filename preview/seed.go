@@ -1,8 +1,11 @@
-// Package preview provides a made-up office group to fill an empty database with, and a way to sign in
-// as any of its people without an email. Anyone who can reach the routes can sign in as anyone.
+// Package preview provides a made-up office group to fill an empty database with, a way to sign in as any
+// of its people without an email, and an outbox that keeps the emails the app would have sent, for a page
+// to show with links that work. Anyone who can reach the routes can sign in as anyone, and read every
+// email.
 package preview
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"strings"
@@ -14,10 +17,19 @@ import (
 	"app/sqlite"
 )
 
-// People of the made-up group, in the order they joined.
+// People of the made-up group, in the order they joined. Each has the address of their name, lowercased,
+// at example.com.
 var people = []string{
 	"Markus", "Signe", "Thomas", "Amira", "Jonas", "Karen", "Henrik",
 	"Mette", "Lars", "Priya", "Oskar", "Freja", "Ibrahim", "Sofie",
+}
+
+// roles of the people of the made-up group who are not members: Markus is the admin, and two others are
+// moderators.
+var roles = map[string]model.Role{
+	"Markus": model.RoleAdmin,
+	"Signe":  model.RoleModerator,
+	"Thomas": model.RoleModerator,
 }
 
 // seedPost of the made-up group, posted daysAgo days before today at the given time of day, in the
@@ -110,9 +122,15 @@ func Seed(ctx context.Context, db *sqlite.Database, now time.Time, loc *time.Loc
 			return false, errors.Wrap(err, "error creating account")
 		}
 
+		role := cmp.Or(roles[name], model.RoleMember)
+		var invitedBy *model.UserID
+		if name != people[0] {
+			invitedBy = new(ids[people[0]])
+		}
+
 		var id model.UserID
-		query := `insert into users (account_id, name, email, confirmed, active) values (?, ?, ?, 1, 1) returning id`
-		if err := db.H.Get(ctx, &id, query, accountID, name, strings.ToLower(name)+"@theloft.example"); err != nil {
+		query := `insert into users (account_id, name, email, confirmed, active, role, invited_by) values (?, ?, ?, 1, 1, ?, ?) returning id`
+		if err := db.H.Get(ctx, &id, query, accountID, name, strings.ToLower(name)+"@example.com", role, invitedBy); err != nil {
 			return false, errors.Wrap(err, "error creating user")
 		}
 		ids[name] = id

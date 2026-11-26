@@ -46,6 +46,18 @@ func CreateUser(t testing.TB, db *sqlite.Database, name string) model.User {
 	return u
 }
 
+// CreatePerson for testing, active and confirmed, with the given name, email address, and role, and an
+// account of their own. Nothing posted or commented before they are created is new to them.
+func CreatePerson(t testing.TB, db *sqlite.Database, name string, email model.EmailAddress, role model.Role) model.User {
+	t.Helper()
+
+	u := CreateUser(t, db, name)
+	if err := db.H.Get(t.Context(), &u, `update users set email = ?, role = ? where id = ? returning *`, email, role, u.ID); err != nil {
+		t.Fatal("error setting email address and role:", err)
+	}
+	return u
+}
+
 // DeactivateUser for testing.
 func DeactivateUser(t testing.TB, db *sqlite.Database, id model.UserID) {
 	t.Helper()
