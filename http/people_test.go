@@ -182,13 +182,16 @@ func TestPeople_signIn(t *testing.T) {
 		sqlitetest.DeactivateUser(t, a.db, karen.ID)
 
 		var answers []*httptest.ResponseRecorder
+		var jobs []int
 		for _, address := range []string{"signe@example.com", "nobody@example.com", "karen@example.com", " Signe@Example.com ", "first@example.com"} {
 			answers = append(answers, a.post(t, nil, "/sign-in", url.Values{"email": {address}}, false))
-			is.Equal(t, 1, len(jobstest.Take(t, a.db)), address)
+			jobs = append(jobs, len(jobstest.Take(t, a.db)))
 		}
 		for _, res := range answers[1:] {
 			sameAnswer(t, answers[0], res)
 		}
+		// The same work, too: a job for each.
+		is.EqualSlice(t, []int{1, 1, 1, 1, 1}, jobs)
 
 		is.Equal(t, http.StatusOK, answers[0].Code)
 		doc := page(t, answers[0])
