@@ -55,27 +55,8 @@ type GroupPageProps struct {
 func GroupPage(props GroupPageProps) Node {
 	props.Title = props.GroupName
 
-	members := fmt.Sprint(props.Members, " members")
-	if props.Members == 1 {
-		members = "1 member"
-	}
-
 	return document(props.PageProps,
-		Header(Class(sign),
-			Div(Class(signInner),
-				Div(Class("flex flex-wrap items-baseline gap-x-5 text-[15px]/6"),
-					Span(Text("regroup")),
-					Span(Text(members)),
-					Div(Class("ml-auto flex min-w-0 items-baseline gap-x-5"),
-						Span(Data("person", ""), Class("min-w-0 font-serif text-lg/6 font-[640] wrap-anywhere"), Text(props.UserName)),
-						Iff(props.Extra != nil, func() Node {
-							return Span(Class("shrink-0 [&_a]:underline [&_a]:decoration-stone-900/50 [&_a]:decoration-1 [&_a]:underline-offset-4 [&_a]:hover:decoration-stone-900"), props.Extra)
-						}),
-					),
-				),
-				H1(Class(signName), Text(props.GroupName)),
-			),
-		),
+		memberSign(signProps{GroupName: props.GroupName, Members: props.Members, UserName: props.UserName, Here: "/", Extra: props.Extra}),
 		Main(Class(wrap+" pt-6 pb-24 lg:pt-8"),
 			Composer(props.Composer),
 			Div(ID(TimelineID),
@@ -139,33 +120,6 @@ func Announcement(key, text string) Node {
 	)
 }
 
-// PrivatePageProps is what the private page shows.
-type PrivatePageProps struct {
-	PageProps
-
-	// Extra is put under the sign, if not nil.
-	Extra Node
-}
-
-// PrivatePage says only that the group is private. It names neither the group nor anyone in it.
-func PrivatePage(props PrivatePageProps) Node {
-	props.Title = "regroup"
-
-	return document(props.PageProps,
-		Main(
-			Div(Class(sign),
-				Div(Class(signInner),
-					Div(Class("text-[15px]/6"), Text("regroup")),
-					H1(Class(signName), Text("This group is private.")),
-				),
-			),
-			Iff(props.Extra != nil, func() Node {
-				return P(Class(wrap+" pt-8 [&_a]:underline [&_a]:decoration-stone-400 [&_a]:decoration-1 [&_a]:underline-offset-4 [&_a]:hover:decoration-stone-900"), props.Extra)
-			}),
-		),
-	)
-}
-
 // ComposerProps is the state of the form a post is written in.
 type ComposerProps struct {
 	// Body is what the person typed, shown in the field.
@@ -211,10 +165,7 @@ func Composer(props ComposerProps) Node {
 		Div(Class("flex items-end gap-2"),
 			Label(For(fieldID), Class("sr-only"), Text("Write to the group")),
 			textarea(fieldID, "Write to the group", props.Body, props.Message != "", props.Message+props.Notice != "", "composer-message", "min-h-[52px] px-[22px] py-3", focus(props.Focus, props.Token)),
-			Button(Type("submit"), data.PreserveAttr("disabled"),
-				Class("inline-flex h-[52px] shrink-0 cursor-pointer items-center rounded-full bg-primary-500 px-[22px] text-stone-900 hover:bg-primary-400 active:bg-primary-600 disabled:cursor-default disabled:opacity-60"),
-				Text("Post"),
-			),
+			Button(Type("submit"), data.PreserveAttr("disabled"), Class(primaryButton), Text("Post")),
 		),
 		message("composer-message", cmp.Or(props.Message, props.Notice)),
 	)

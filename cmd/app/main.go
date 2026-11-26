@@ -11,6 +11,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"go.opentelemetry.io/otel"
 	"maragu.dev/env"
 	"maragu.dev/errors"
 	"maragu.dev/glue/app"
@@ -40,14 +41,18 @@ func main() {
 var defaultGroupName = "Our group"
 
 // setupPreview is set only in the preview build, by the file behind the preview build tag. It seeds an
-// empty database and returns what adds the preview's routes.
-var setupPreview func(ctx context.Context, log *slog.Logger, db *sqlite.Database, now func() time.Time, group model.Group) (func(*gluehttp.Router), error)
+// empty database, and returns what adds the preview's routes and what keeps the emails the app would
+// have sent, which the preview sends instead of sending them.
+var setupPreview func(ctx context.Context, log *slog.Logger, db *sqlite.Database, now func() time.Time, group model.Group) (func(*gluehttp.Router), email.Sender, error)
 
 // previewLink is set only in the preview build, by the file behind the preview build tag. It returns the
 // link to the preview's list of people that pages show.
 var previewLink func(signedIn bool) gomponents.Node
 
 func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
+	// Before anything gets a tracer, so that no span records the values of a URL's query.
+	otel.SetTracerProvider(http.HideQueryValues(otel.GetTracerProvider()))
+
 	databaseLog := log.With("component", "sql.Database")
 
 	jobTimeout := env.GetDurationOrDefault("JOB_QUEUE_TIMEOUT", 10*time.Second)
@@ -110,12 +115,12 @@ func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
 	_, serverPort, _ := net.SplitHostPort(address)
 	baseURL := env.GetStringOrDefault("BASE_URL", "http://localhost:"+serverPort)
 
-	sender := postmark.NewSender(postmark.NewSenderOptions{
+	var sender email.Sender = postmark.NewSender(postmark.NewSenderOptions{
 		AppName:                   env.GetStringOrDefault("APP_NAME", "App"),
 		BaseURL:                   baseURL,
-		Emails:                    email.GetTemplates(),
+		Emails:                    html.EmailTemplates(),
 		Key:                       env.GetStringOrDefault("POSTMARK_KEY", ""),
-		Log:                       log.With("component", "email.Sender"),
+		Log:                       slog.New(withoutAddresses(log.Handler())).With("component", "email.Sender"),
 		MarketingEmailAddress:     model.EmailAddress(env.GetStringOrDefault("MARKETING_EMAIL_ADDRESS", "marketing@example.com")),
 		MarketingEmailName:        env.GetStringOrDefault("MARKETING_EMAIL_NAME", "Marketing"),
 		ReplyToEmailAddress:       model.EmailAddress(env.GetStringOrDefault("REPLY_TO_EMAIL_ADDRESS", "support@example.com")),
@@ -124,20 +129,32 @@ func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
 		TransactionalEmailName:    env.GetStringOrDefault("TRANSACTIONAL_EMAIL_NAME", "Transactional"),
 	})
 
-	jobs.Register(runner, jobs.RegisterOpts{
-		Log:    log.With("component", "jobs"),
-		Sender: sender,
-	})
-
 	group, err := model.NewGroup(cmp.Or(env.GetStringOrDefault("GROUP_NAME", ""), defaultGroupName), env.GetStringOrDefault("GROUP_TIME_ZONE", ""))
 	if err != nil {
 		return errors.Wrap(err, "error configuring group")
 	}
 
+	firstAdmin, err := parseFirstAdmin(env.GetStringOrDefault("FIRST_ADMIN_EMAIL", ""))
+	if err != nil {
+		return err
+	}
+
+	var previewInjector func(*gluehttp.Router)
+	if setupPreview != nil {
+		previewInjector, sender, err = setupPreview(ctx, log, db, time.Now, group)
+		if err != nil {
+			return errors.Wrap(err, "error setting up preview")
+		}
+	}
+
 	svc := service.NewFat(service.NewFatOptions{
 		Log: log.With("component", "service.Fat"),
 	})
-	service.Setup(svc, bucket, db, sender, time.Now, group)
+	service.Setup(svc, bucket, db, sender, time.Now, rand.Reader, group, firstAdmin)
+
+	jobs.Register(runner, jobs.RegisterOpts{
+		Emails: svc,
+	})
 
 	routerInjector := http.InjectHTTPRouter(log, svc, http.InjectHTTPRouterOptions{
 		Group:  group,
@@ -145,11 +162,7 @@ func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
 		Random: rand.Reader,
 		Extra:  previewLink,
 	})
-	if setupPreview != nil {
-		previewInjector, err := setupPreview(ctx, log, db, time.Now, group)
-		if err != nil {
-			return errors.Wrap(err, "error setting up preview")
-		}
+	if previewInjector != nil {
 		appInjector := routerInjector
 		routerInjector = func(r *gluehttp.Router) {
 			appInjector(r)
@@ -169,7 +182,6 @@ func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
 		HTMLPage:           html.Page,
 		HTTPRouterInjector: routerInjector,
 		Log:                log.With("component", "http.Server"),
-		PermissionsGetter:  db,
 		SecureCookie:       env.GetBoolOrDefault("SECURE_COOKIE", true),
 		SessionStore:       store,
 		UserActiveChecker:  db,
@@ -185,4 +197,17 @@ func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
 	})
 
 	return nil
+}
+
+// parseFirstAdmin from the configuration: the email address of the person who can sign in and join as
+// the first admin while the group has nobody in it. Empty means nobody can.
+func parseFirstAdmin(s string) (model.EmailAddress, error) {
+	if s == "" {
+		return "", nil
+	}
+	e, err := model.ParseEmailAddress(s)
+	if err != nil {
+		return "", errors.New("FIRST_ADMIN_EMAIL is not an email address")
+	}
+	return e, nil
 }

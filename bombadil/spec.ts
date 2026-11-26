@@ -1,8 +1,8 @@
 // The product's rules for the group page, as bombadil checks, and the actions bombadil explores it with.
 // Run it with "make bombadil"; docs/research/bombadil.md says how, and how to read a failure.
 //
-// There are no roles yet. Every check holds for whoever is signed in, which "Switch person" in the
-// preview build changes, and for someone who is not signed in.
+// The checks do not tell the roles apart yet. Every check holds for whoever is signed in, which "Switch
+// person" in the preview build changes, and for someone who is not signed in.
 
 import { always } from "@antithesishq/bombadil";
 import { actions, extract, getFingerprint, registerCustomAction, weighted } from "@antithesishq/bombadil/browser";
@@ -266,7 +266,7 @@ const loadEarlier = registerCustomAction("loadEarlier", async (document) => {
 const onGroupPage = extract((state) => page.isGroupPage(state.document));
 
 const signOut = registerCustomAction("signOut", async (document, window) => {
-  page.forgetSignIn(window);
+  page.signOutSent(window);
   const form = document.createElement("form");
   form.method = "post";
   form.action = "/logout";
@@ -295,6 +295,6 @@ export const exploring = weighted([
   [10, actions(() => openThreads.current.map((postID) => commentWhileReopening(postID, "While reopening " + tag())))],
   // Loads earlier posts. The button is at the end of the timeline, further down than scrolling often gets.
   [10, actions(() => (earlierOffered.current ? [loadEarlier()] : []))],
-  // Signs out, by the route the app has for it, which no page links to yet.
+  // Signs out, by the route the button on the sign sends to, from wherever the group page is.
   [2, actions(() => (onGroupPage.current ? [signOut()] : []))],
 ]);

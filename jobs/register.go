@@ -1,24 +1,33 @@
 package jobs
 
 import (
-	"log/slog"
-
-	"maragu.dev/glue/email/postmark"
 	"maragu.dev/glue/jobs"
 
 	"app/model"
 )
 
+// emailSender sends the emails of the app.
+type emailSender interface {
+	signInLinkSender
+	invitationSender
+}
+
 type RegisterOpts struct {
-	Log    *slog.Logger
-	Sender *postmark.Sender
+	// Emails is what sends the app's emails.
+	Emails emailSender
+}
+
+// Funcs of every job, by name, with the given dependencies.
+func Funcs(opts RegisterOpts) map[model.JobName]jobs.Func {
+	return map[model.JobName]jobs.Func{
+		model.JobNameSendSignInLink: SendSignInLink(opts.Emails),
+		model.JobNameSendInvitation: SendInvitation(opts.Emails),
+	}
 }
 
 // Register all available jobs with the given dependencies.
 func Register(r *jobs.Runner, opts RegisterOpts) {
-	if opts.Log == nil {
-		opts.Log = slog.New(slog.DiscardHandler)
+	for name, f := range Funcs(opts) {
+		r.Register(name.String(), f)
 	}
-
-	r.Register(model.JobNameSendEmail.String(), SendEmail(opts.Log, opts.Sender))
 }

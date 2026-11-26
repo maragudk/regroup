@@ -39,6 +39,7 @@ import (
 	apphttp "app/http"
 	"app/model"
 	"app/service"
+	"app/servicetest"
 	"app/sqlite"
 	"app/sqlitetest"
 	"app/timelinetest"
@@ -49,7 +50,7 @@ import (
 var base = time.Date(2031, 3, 14, 9, 0, 0, 0, time.UTC)
 
 func TestTimeline(t *testing.T) {
-	t.Run("shows someone who is not signed in only that the group is private", func(t *testing.T) {
+	t.Run("shows someone who is not signed in only that the group is private, with the field to ask for a sign-in link", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake in the kitchen.")
@@ -69,7 +70,8 @@ func TestTimeline(t *testing.T) {
 		for _, secret := range []string{"The Loft", "Cake", "carrot", "Signe", "member", post.ID.String()} {
 			is.True(t, !strings.Contains(page, secret), "the page has "+secret+" in it:\n"+page)
 		}
-		is.Equal(t, 0, len(all(doc, tag("form"))))
+		is.EqualSlice(t, []string{"/sign-in"}, attrs(all(doc, tag("form")), "action"))
+		is.EqualSlice(t, []string{"email"}, attrs(all(doc, tag("input")), "name"))
 		is.Equal(t, 0, len(all(doc, tag("a"))))
 	})
 
@@ -282,9 +284,9 @@ func TestTimeline(t *testing.T) {
 
 		doc := parse(t, a.get(t, a.signIn(t, signe), "/").Body.String())
 
-		is.Equal(t, 0, len(all(doc, tag("a"))))
-		is.EqualSlice(t, []string{"Post", "Comment"}, texts(all(doc, tag("button"))))
-		is.EqualSlice(t, []string{"/posts", "/comments/open", "/comments", "/posts/earlier"}, attrs(all(doc, tag("form")), "action"))
+		is.EqualSlice(t, []string{"/members", "/"}, attrs(all(doc, tag("a")), "href"))
+		is.EqualSlice(t, []string{"Sign out", "Post", "Comment"}, texts(all(doc, tag("button"))))
+		is.EqualSlice(t, []string{"/logout", "/posts", "/comments/open", "/comments", "/posts/earlier"}, attrs(all(doc, tag("form")), "action"))
 		is.Equal(t, 0, len(all(doc, tag("input")))-len(all(doc, func(n *nethtml.Node) bool { return n.Data == "input" && attr(n, "type") == "hidden" })))
 	})
 
@@ -2163,9 +2165,13 @@ func TestInjectHTTPRouter(t *testing.T) {
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 
 		for _, cookie := range []*http.Cookie{nil, a.signIn(t, signe)} {
-			page := a.get(t, cookie, "/").Body.String()
-			is.Equal(t, 0, len(all(parse(t, page), tag("a"))))
-			is.True(t, !strings.Contains(page, "preview"), page)
+			for _, path := range []string{"/", "/members"} {
+				page := a.get(t, cookie, path).Body.String()
+				is.Equal(t, 0, len(all(parse(t, page), func(n *nethtml.Node) bool {
+					return n.Data == "a" && attr(n, "href") != "/members" && attr(n, "href") != "/"
+				})))
+				is.True(t, !strings.Contains(page, "preview"), page)
+			}
 		}
 	})
 
@@ -2181,8 +2187,14 @@ func TestInjectHTTPRouter(t *testing.T) {
 		is.Equal(t, "/preview", attr(link, "href"))
 		is.Equal(t, "signed in: false", text(link))
 
-		link = one(t, one(t, parse(t, a.get(t, a.signIn(t, signe), "/").Body.String()), tag("header")), tag("a"))
-		is.Equal(t, "signed in: true", text(link))
+		for _, path := range []string{"/", "/members"} {
+			link = one(t, one(t, parse(t, a.get(t, a.signIn(t, signe), path).Body.String()), tag("header")), func(n *nethtml.Node) bool { return attr(n, "href") == "/preview" })
+			is.Equal(t, "signed in: true", text(link))
+		}
+		for _, path := range []string{"/sign-in", "/members", "/sign-in/link?token=garbage"} {
+			link = one(t, parse(t, a.get(t, nil, path).Body.String()), func(n *nethtml.Node) bool { return attr(n, "href") == "/preview" })
+			is.Equal(t, "signed in: false", text(link))
+		}
 	})
 }
 
@@ -2853,6 +2865,13 @@ type app struct {
 	handler http.Handler
 	clock   *clock
 	logs    *logs
+
+	// sender keeps the emails the app sends, and firstAdmin is the address of the first admin, if any.
+	sender     *servicetest.Sender
+	firstAdmin model.EmailAddress
+
+	// fat is the business logic behind the routes.
+	fat *service.Fat
 }
 
 // clock that a test sets, and that the app reads the time from.
@@ -2889,13 +2908,14 @@ func (l *logs) Reset() {
 }
 
 // store is the real database, which a test can make fail for the business logic: with the given error
-// from the operation of the given name, or by having everyone turn out inactive or gone when the
-// business logic looks them up.
+// from the operation of the given name, or by having everyone turn out inactive, gone, or a member when
+// the business logic looks them up.
 type store struct {
 	*sqlite.Database
 	fail     map[string]error
 	inactive bool
 	gone     bool
+	demoted  bool
 }
 
 func (s *store) GetUser(ctx context.Context, id model.UserID) (model.User, error) {
@@ -2906,7 +2926,17 @@ func (s *store) GetUser(ctx context.Context, id model.UserID) (model.User, error
 	if s.inactive {
 		u.Active = false
 	}
+	if s.demoted {
+		u.Role = model.RoleMember
+	}
 	return u, err
+}
+
+func (s *store) ListMembers(ctx context.Context) ([]model.User, error) {
+	if err := s.fail["ListMembers"]; err != nil {
+		return nil, err
+	}
+	return s.Database.ListMembers(ctx)
 }
 
 func (s *store) CountActiveUsers(ctx context.Context) (int, error) {
@@ -2946,8 +2976,16 @@ func (s *store) GetComments(ctx context.Context, reader model.UserID, postID mod
 
 // config of an [app].
 type config struct {
-	zone  string
-	extra func(signedIn bool) Node
+	zone       string
+	extra      func(signedIn bool) Node
+	firstAdmin model.EmailAddress
+}
+
+// withFirstAdmin sets the address of the first admin.
+func withFirstAdmin(e model.EmailAddress) func(*config) {
+	return func(c *config) {
+		c.firstAdmin = e
+	}
 }
 
 // inZone sets the group's time zone.
@@ -2970,7 +3008,7 @@ func newApp(t *testing.T, opts ...func(*config)) *app {
 	is.NotError(t, err)
 	group := model.Group{Name: "The Loft", TimeZone: loc}
 
-	a := &app{db: sqlitetest.NewDatabase(t), sm: scs.New(), clock: &clock{t: base}, logs: &logs{}}
+	a := &app{db: sqlitetest.NewDatabase(t), sm: scs.New(), clock: &clock{t: base}, logs: &logs{}, sender: &servicetest.Sender{}, firstAdmin: c.firstAdmin}
 	a.store = &store{Database: a.db, fail: map[string]error{}}
 	a.route(group, c.extra, 0)
 	return a
@@ -2989,6 +3027,20 @@ func (a *app) route(group model.Group, extra func(signedIn bool) Node, pageSize 
 	service.GetComments(fat, a.store)
 	service.GetMembers(fat, a.store)
 	service.GetTimeline(fat, a.store, a.clock.Now, group)
+	random := rand.NewChaCha8([32]byte{1})
+	service.RequestSignInLink(fat, a.db)
+	service.SendSignInLink(fat, a.db, a.sender, a.clock.Now, random, group, a.firstAdmin)
+	service.CheckSignInLink(fat, a.db, a.clock.Now, a.firstAdmin)
+	service.SignIn(fat, a.db, a.clock.Now, a.firstAdmin)
+	service.Invite(fat, a.store, a.clock.Now)
+	service.SendInvitation(fat, a.db, a.sender, a.clock.Now, random, group)
+	service.CheckInvitation(fat, a.db, a.clock.Now)
+	service.AcceptInvitation(fat, a.db, a.clock.Now)
+	service.ListMembers(fat, a.store)
+	service.GetInvitations(fat, a.store, a.clock.Now)
+	service.WithdrawInvitation(fat, a.store, a.clock.Now)
+	service.ChangeRole(fat, a.db)
+	a.fat = fat
 
 	// The same middleware as [gluehttp.Server] puts in front of every page, in its order and nesting.
 	protection := http.NewCrossOriginProtection()
@@ -2998,6 +3050,7 @@ func (a *app) route(group model.Group, extra func(signedIn bool) Node, pageSize 
 		r.Use(httph.NoClickjacking, httph.ContentSecurityPolicy(apphttp.CSP(false)))
 		r.Use(a.sm.LoadAndSave, gluehttp.Authenticate(log, a.sm, a.db))
 		r.NotFound(gluehttp.NotFound(html.Page))
+		gluehttp.Logout(r, log, a.sm, html.Page)
 
 		r.Group(func(r *gluehttp.Router) {
 			apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{

@@ -10,6 +10,7 @@ import (
 	. "maragu.dev/gomponents/html"
 
 	"app/html"
+	apphttp "app/http"
 	"app/model"
 	"app/sqlite"
 )
@@ -23,9 +24,14 @@ func PeopleLink(signedIn bool) Node {
 	return A(Href("/preview"), Text("This is a preview. Choose someone to sign in as."))
 }
 
-// Routes of the preview: a list of everyone active in the group at /preview, and signing in as any of
-// them by putting their ID in the session under [gluehttp.SessionUserIDKey].
-func Routes(r *gluehttp.Router, log *slog.Logger, db *sqlite.Database) {
+// Routes of the preview: a list of everyone active in the group at /preview, signing in as any of them by
+// putting their ID in the session under [gluehttp.SessionUserIDKey], and the emails in the given outbox at
+// /preview/emails.
+func Routes(r *gluehttp.Router, log *slog.Logger, db *sqlite.Database, outbox *Outbox) {
+	r.Get("/preview/emails", func(props html.PageProps) (Node, error) {
+		return emailsPage(props, outbox)
+	})
+
 	r.Get("/preview", func(props html.PageProps) (Node, error) {
 		var users []model.User
 		if err := db.H.Select(props.Ctx, &users, `select * from users where active = 1 order by name`); err != nil {
@@ -35,6 +41,7 @@ func Routes(r *gluehttp.Router, log *slog.Logger, db *sqlite.Database) {
 		props.Title = "Preview: sign in as"
 		return html.Page(props,
 			H1(Text("Sign in as")),
+			P(A(Href("/preview/emails"), Text("See the emails the preview kept instead of sending them"))),
 			Ul(Class("grid gap-2"),
 				Map(users, func(u model.User) Node {
 					return Li(
@@ -58,10 +65,9 @@ func Routes(r *gluehttp.Router, log *slog.Logger, db *sqlite.Database) {
 			return html.ErrorPage(props), err
 		}
 
-		if err := r.SM.RenewToken(props.Ctx); err != nil {
+		if err := apphttp.SignInSession(props.Ctx, r.SM, id); err != nil {
 			return html.ErrorPage(props), err
 		}
-		r.SM.Put(props.Ctx, gluehttp.SessionUserIDKey, id.String())
 
 		log.InfoContext(props.Ctx, "Signed in for the preview", "userID", id)
 

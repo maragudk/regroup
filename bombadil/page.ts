@@ -124,12 +124,35 @@ export function clean(raw: string, maxLength: number): Cleaned {
 // ---- What is kept in the browser ----
 
 // The person is signed in, as far as this browser tab knows. Session storage outlives the page, but not
-// the tab, and a run has one tab. It is set when a sign-in form is sent, and cleared by forgetSignIn.
+// the tab, and a run has one tab. It is set when the preview's form to sign in as someone is sent, and
+// cleared when the page after signing out comes.
 const signedInKey = "regroup-bombadil-signed-in";
 
-// forgetSignIn, for when the person signs out.
-export function forgetSignIn(window: Window) {
-  window.sessionStorage.removeItem(signedInKey);
+// The form that signs out was sent, from the page with the time origin it holds. The page that sent it
+// can still be read before the answer comes, and is still for someone signed in, so the next page is the
+// first that is not.
+const signingOutKey = "regroup-bombadil-signing-out";
+
+// A form that signs in if its link works was sent: a sign-in link's, or an invitation's. Whether it did is
+// known only from the page that answers it, which is the group page at / if it did, so the next page
+// decides, and sets signedInKey if it did. It holds the time origin of the page that sent it, so that
+// the page that sent it, which can still be read before the answer comes, decides nothing.
+const signingInKey = "regroup-bombadil-signing-in";
+
+// signOutSent, for when the form that signs out is sent from the given window's page.
+export function signOutSent(window: Window) {
+  session(window)?.setItem(signingOutKey, String(window.performance.timeOrigin));
+}
+
+// session storage of the given window, or null on a page that the browser makes itself, where no
+// storage can be read, such as the one it shows on going back to the answer to a form, which it asks
+// before sending again. Such a page shows nothing of the app.
+function session(window: Window): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
 }
 
 // Names of the group and of the people in it, as seen on pages for someone signed in, and on the
@@ -233,8 +256,17 @@ export function recorder(window: Window): Recorder {
       const form = event.target;
       if (!(form instanceof HTMLFormElement)) return;
 
-      if ((form.getAttribute("action") ?? "").endsWith("/preview/sign-in")) {
+      const action = form.getAttribute("action") ?? "";
+      if (action.endsWith("/preview/sign-in")) {
         window.sessionStorage.setItem(signedInKey, "1");
+        return;
+      }
+      if (action.endsWith("/logout")) {
+        signOutSent(window);
+        return;
+      }
+      if (action.endsWith("/sign-in/link") || action.endsWith("/invitation")) {
+        window.sessionStorage.setItem(signingInKey, String(window.performance.timeOrigin));
         return;
       }
 
@@ -501,8 +533,19 @@ function checkOpen(document: Document, postID: string, fresh: number | null): st
 // for someone signed in or on the preview's list of people. Names are matched as whole words, with
 // their case. It learns the names as it goes.
 export function privacyProblems(window: Window, document: Document): string[] {
-  const signedIn = window.sessionStorage.getItem(signedInKey) === "1";
+  const storage = session(window);
+  if (storage === null) return [];
   const path = window.location.pathname;
+  const signingOut = storage.getItem(signingOutKey);
+  if (signingOut !== null && signingOut !== String(window.performance.timeOrigin)) {
+    for (const key of [signingOutKey, signingInKey, signedInKey]) storage.removeItem(key);
+  }
+  const signingIn = storage.getItem(signingInKey);
+  if (signingIn !== null && signingIn !== String(window.performance.timeOrigin)) {
+    storage.removeItem(signingInKey);
+    if (path === "/" && isGroupPage(document)) storage.setItem(signedInKey, "1");
+  }
+  const signedIn = storage.getItem(signedInKey) === "1";
 
   if (isGroupPage(document) && signedIn) {
     const people = [personName(document) ?? ""];

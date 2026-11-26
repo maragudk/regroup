@@ -1,7 +1,7 @@
 name: Nightly
 
 # The tests that generate their own cases, for longer than a pull request waits for: the stateful
-# history tests with many more histories of more steps, each fuzz target for a few minutes, and the whole
+# history tests of the timeline and of people with many more histories of more steps, each fuzz target for a few minutes, and the whole
 # test suite under the race detector, shuffled and run three times. It runs on main every night, and
 # when started by hand. A failure on main opens an issue labelled "nightly", or comments on the one that
 # is open. It is not a merge gate. Bombadil, which explores the app in a browser, has a workflow of its
@@ -86,7 +86,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/nightly"
           echo "$HISTORY_CASES histories of $HISTORY_STEPS steps each"
-          go test -count=1 -timeout 45m -tags "$GO_TAGS" -run 'TestFat_history|TestTimeline_history' ./service/ ./http/ 2>&1 | tee "$RUNNER_TEMP/nightly/history.log"
+          go test -count=1 -timeout 45m -tags "$GO_TAGS" -run 'TestFat_history|TestTimeline_history|TestFat_peopleHistory' ./service/ ./http/ 2>&1 | tee "$RUNNER_TEMP/nightly/history.log"
 
       - name: Keep the log
         if: ${{ !cancelled() }}

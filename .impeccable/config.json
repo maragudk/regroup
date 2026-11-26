@@ -8,6 +8,15 @@
         "value": "fraunces",
         "createdAt": "2026-11-26T16:46:35.172Z",
         "reason": "user confirmed: Markus chose Fraunces on 2026-11-26 (\"Let's go with Fraunces, but don't load it from Google fonts\"), recorded in docs/todo/group-page.md"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          "html/emails/layout.html"
+        ],
+        "createdAt": "2026-11-26T20:52:42.359Z",
+        "reason": "builder: an email layout cannot rely on the app's self-hosted fonts, so it keeps glue's system font stack"
       }
     ]
   }
