@@ -1,6 +1,7 @@
 package model_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -290,5 +291,47 @@ func visibleRune() hegel.Generator[rune] {
 
 		tc.Assume(!blank(v))
 		return v
+	})
+}
+
+func FuzzCleanPostBody(f *testing.F) {
+	f.Add("Cake in the kitchen.")
+	f.Add("")
+	f.Add("  \r\n\t ")
+	f.Add("a\r\nb\rc")
+	f.Add("\xff")
+	f.Add("Cake\x07")
+	f.Add(string(rune(0x200b)) + string(rune(0x3164)))
+	f.Add(strings.Repeat("æ", model.CommentBodyMaxLength+1))
+
+	f.Fuzz(func(t *testing.T, s string) {
+		post, postErr := model.CleanPostBody(s)
+		comment, commentErr := model.CleanCommentBody(s)
+
+		for _, err := range []error{postErr, commentErr} {
+			if err != nil && !errors.Is(err, model.ErrorBodyEmpty) && !errors.Is(err, model.ErrorBodyInvalid) && !errors.Is(err, model.ErrorBodyTooLong) {
+				t.Fatalf("unexpected error %v", err)
+			}
+		}
+
+		// A comment is a post with a lower maximum: what is fine as one is fine as the other, the same.
+		if commentErr == nil && (postErr != nil || post != comment) {
+			t.Fatalf("cleaned %q as the comment %q, but as the post %q with %v", s, comment, post, postErr)
+		}
+		if postErr != nil {
+			return
+		}
+
+		// What is accepted is text with line feeds for line breaks, nothing to trim, at most the maximum
+		// length, no control character but line feeds and tabs, and the same when cleaned again.
+		if !utf8.ValidString(post) || strings.ContainsRune(post, '\r') || strings.TrimSpace(post) != post || utf8.RuneCountInString(post) > model.PostBodyMaxLength {
+			t.Fatalf("cleaned %q as %q", s, post)
+		}
+		if strings.ContainsFunc(post, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\t' }) {
+			t.Fatalf("cleaned %q as %q, with a control character in it", s, post)
+		}
+		if again, err := model.CleanPostBody(post); err != nil || again != post {
+			t.Fatalf("cleaned %q as %q, and that as %q with %v", s, post, again, err)
+		}
 	})
 }

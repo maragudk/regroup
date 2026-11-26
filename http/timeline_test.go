@@ -2466,6 +2466,20 @@ func FuzzTimeline(f *testing.F) {
 			}
 			is.Equal(t, http.StatusOK, res.Code, path)
 			a.patches(t, res)
+
+			// The same form sent again with any text, any field, and any post makes nothing, and is
+			// answered with patches that put the text back in a form.
+			again := url.Values{"body": {body}, "token": {token}, "field": {field}, "post": {field}}
+			res = a.post(t, cookie, path, again, true)
+			is.Equal(t, http.StatusOK, res.Code, path)
+			is.True(t, utf8.Valid(res.Body.Bytes()), "the answer is not valid UTF-8")
+			patches := a.patches(t, res)
+			is.Equal(t, 1, len(all(patches[0], tag("textarea"))), path)
+			for _, p := range patches {
+				is.Equal(t, 0, len(all(p, tag("script"))), path)
+			}
+			is.Equal(t, posts+map[string]int{"/posts": 1}[path], a.count(t, "posts"), path)
+			is.Equal(t, comments+map[string]int{"/comments": 1}[path], a.count(t, "comments"), path)
 		}
 	})
 }

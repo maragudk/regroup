@@ -32,7 +32,7 @@ The page a member opens: the group's timeline. Agreed with Markus on 2026-11-26.
 - Opening or reloading the timeline counts as a look, so a reload clears the marks on posts. Posting, commenting, and loading earlier posts happen in place and do not count as a look.
 - Until sign-in is built, a visitor who is not signed in sees only "This group is private." The people build decides what the sign-in page shows, including whether it names the group.
 - The app's icon is a plain square in the primary orange, served by the app itself.
-- The rest of the work is split across builders in this order: the generated-history and fuzz tests; bombadil with its CI job and the nightly run; then the design review and the preview.
+- The rest of the work is split across builders in this order: bombadil with its CI job and the nightly run; then the design review and the preview.
 
 ## Open
 
