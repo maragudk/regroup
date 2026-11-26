@@ -206,38 +206,30 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		day := model.GroupByDay([]model.TimelinePost{{Post: post, AuthorName: user.Name}}, group.TimeZone, now)[0]
 
 		// The same form can be sent again after the post is on the page, so the post is added only to a
-		// timeline that does not have it yet, which makes adding it idempotent. A page that has it
-		// already gets nothing more than the composer.
-		timeline := "#" + html.TimelineID + ":not(:has(#post-" + post.ID.String() + "))"
+		// timeline that does not have it yet, which makes adding it idempotent.
+		absent := "#" + html.TimelineID + ":not(:has(#post-" + post.ID.String() + "))"
 
 		// The page said which days it has a heading for at its top. The post goes under the heading of
-		// its day if that is one of them.
-		if slices.Contains(days, day.Date) {
+		// its day if that is one of them. A post from a day older than the newest the page has brings no
+		// heading of its own, which would be above newer days: that is a form sent again some time after
+		// it first was, or a clock that went back. It goes under the heading of its day if the page has
+		// that further down, and is not added otherwise.
+		if slices.ContainsFunc(days, func(d model.Date) bool { return d.Compare(day.Date) >= 0 }) {
 			return nil, writePatches(props.W,
 				patch{elements: composer(days)},
-				patch{selector: timeline + " #" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts, posts)},
+				patch{selector: absent + " #" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts, posts)},
 			)
 		}
 
-		// A post from a day older than the newest the page has heads its own day nowhere, since the
-		// heading would be above newer days. That is a form sent again some time after it first was, or
-		// a clock that went back. The post goes under the heading of its day if the page has that
-		// further down, and is not added otherwise.
-		if slices.ContainsFunc(days, func(d model.Date) bool { return d.Compare(day.Date) > 0 }) {
-			return nil, writePatches(props.W,
-				patch{elements: composer(days)},
-				patch{selector: timeline + " #" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts, posts)},
-			)
-		}
-
-		// Otherwise it brings its day's heading along, to the top of the timeline. If the timeline was
-		// empty, and said so, the day takes the place of that.
+		// Otherwise it brings its day's heading along, to the top of a timeline that does not have the
+		// day yet. If the timeline was empty, and said so, the day takes the place of that, on a timeline
+		// that has no day.
 		patches := []patch{
 			{elements: composer(firstDays(append([]model.Date{day.Date}, days...)))},
-			{selector: timeline, mode: "prepend", elements: html.TimelineDay(day, now, posts)},
+			{selector: absent + ":not(:has(#" + html.DayPostsID(day.Date) + "))", mode: "prepend", elements: html.TimelineDay(day, now, posts)},
 		}
 		if len(days) == 0 {
-			patches[1].mode = "inner"
+			patches[1] = patch{selector: absent + ":not(:has([data-day]))", mode: "inner", elements: html.TimelineDay(day, now, posts)}
 			return nil, writePatches(props.W, patches...)
 		}
 
@@ -292,9 +284,14 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		focus := posts
 		focus.Focus = true
 		for _, day := range timeline.Days {
+			// A post can be on the page already under a day that goes on, put there by its form sent
+			// again, so each post goes only to a timeline that does not have it yet.
 			if slices.Contains(known, day.Date) {
-				patches = append(patches, patch{selector: "#" + html.DayPostsID(day.Date), mode: "append", elements: html.TimelinePosts(day.Posts, focus)})
-				focus = posts
+				for _, p := range day.Posts {
+					absent := "#" + html.TimelineID + ":not(:has(#post-" + p.ID.String() + ")) #" + html.DayPostsID(day.Date)
+					patches = append(patches, patch{selector: absent, mode: "append", elements: html.TimelinePosts([]model.TimelinePost{p}, focus)})
+					focus = posts
+				}
 				continue
 			}
 			days = append(days, day)

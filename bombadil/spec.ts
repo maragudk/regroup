@@ -37,7 +37,7 @@ const recorded = extract((state) => {
   const r = page.recorder(state.window);
   return {
     wrong: [...r.wrong, ...page.overdue(r, 10_000)],
-    twice: r.twice,
+    twice: [...r.twice, ...page.buttonProblems(r, state.document)],
     failed: [...r.failed, ...page.failedResources(state.window)],
     failing: r.failing,
     violations: r.violations,
@@ -198,7 +198,8 @@ function fetched(document: Document, window: Window, element: Element, type: str
 }
 
 // Opens a post's comments, and closes and opens them again while the first opening is on its way, as
-// someone who clicks twice does. Opening them again sends nothing until the first answer has come.
+// someone who clicks again and again does. Opening them again sends nothing until the first answer has
+// come.
 const reopenComments = registerCustomAction("reopenComments", async (document, window, postID: string) => {
   const details = document.getElementById("post-" + postID + "-thread");
   if (!(details instanceof HTMLDetailsElement) || details.open) return;
@@ -210,24 +211,27 @@ const reopenComments = registerCustomAction("reopenComments", async (document, w
   details.open = true;
 });
 
-// Comments on a post whose comments are open, and while the comment is on its way, closes and opens the
-// comments again and presses Comment once their answer has come. The button stays off until the
-// comment's own answer has come, so the second press sends nothing.
-const commentWhileReopening = registerCustomAction("commentWhileReopening", async (document, window, postID: string) => {
+// Comments with the given text on a post whose comments are open, and while the comment is on its way,
+// closes and opens the comments again, and presses Comment again once opening them is done, if the
+// comment is still on its way. Its button stays off until the comment's own answer has come, so the
+// second press sends nothing.
+const commentWhileReopening = registerCustomAction("commentWhileReopening", async (document, window, postID: string, text: string) => {
   const details = document.getElementById("post-" + postID + "-thread");
   const form = document.getElementById("post-" + postID + "-comment-form");
   const field = form?.querySelector("textarea");
   const button = form?.querySelector<HTMLButtonElement>("button[type=submit]");
   if (!(details instanceof HTMLDetailsElement) || !details.open || !form || !field || !button || button.disabled) return;
-  field.value = "While reopening " + Date.now();
+  field.value = text;
   field.dispatchEvent(new Event("input", { bubbles: true }));
+  let commented = false;
+  void fetched(document, window, form, "finished").then(() => (commented = true));
   button.click();
   details.open = false;
   await new Promise((resolve) => window.setTimeout(resolve, 0));
   const opened = fetched(document, window, details, "finished");
   details.open = true;
   await opened;
-  if (!button.disabled) button.click();
+  if (!commented && !button.disabled) button.click();
 });
 
 const earlierOffered = extract((state) => {
@@ -269,7 +273,7 @@ export const exploring = weighted([
   // Opens a post's comments twice in quick succession.
   [10, actions(() => closedThreads.current.map((postID) => reopenComments(postID)))],
   // Comments while the post's comments are opened again.
-  [10, actions(() => openThreads.current.map((postID) => commentWhileReopening(postID)))],
+  [10, actions(() => openThreads.current.map((postID) => commentWhileReopening(postID, "While reopening " + tag())))],
   // Loads earlier posts. The button is at the end of the timeline, further down than scrolling often gets.
   [10, actions(() => (earlierOffered.current ? [loadEarlier()] : []))],
   // Signs out, by the route the app has for it, which no page links to yet.

@@ -131,9 +131,11 @@ func TestGroupPage(t *testing.T) {
 				is.Equal(t, "", attribute(n, "data-on:submit"))
 				is.Equal(t, "details", n.Parent.Data)
 				is.Equal(t, n.Parent.Attr[0].Val+"-open", attribute(n, "id"))
-				// Only one opening is on its way at a time, so that a second cannot use up the marks the
-				// first brings before the reader has seen them.
-				is.Equal(t, "el.open && !el.opening && (el.opening = @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'}).catch(() => $_failed = true).finally(() => el.opening = null))", attribute(n.Parent, "data-on:toggle"))
+				// Nothing is sent while a request about the comments is on its way, so that a second
+				// answer cannot replace the marks the first brings before the reader has seen them, and
+				// an answer that came while the comments were closed is shown when they open again. A
+				// request that fails leaves the comments no longer loading.
+				is.Equal(t, "if (el.open && !el.opening && !el.querySelector('button:disabled')) { if (el.unseen) { el.unseen = false } else { el.opening = @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'}).catch(() => $_failed = true).finally(() => { const loading = el.querySelector('[data-loading]'); loading && (loading.removeAttribute('data-loading'), loading.replaceChildren()); el.opening = null; el.unseen = !el.open && !loading }) } }", attribute(n.Parent, "data-on:toggle"))
 				continue
 			}
 			// A request that cannot be sent at all fails with an error that would go unhandled. It is
@@ -143,7 +145,7 @@ func TestGroupPage(t *testing.T) {
 		is.EqualSlice(t, []string{"/posts", "/comments/open", "/comments", "/posts/earlier"}, forms)
 	})
 
-	t.Run("marks the name of the person the page is for, and the name of the author of every post and comment, for checks to find", func(t *testing.T) {
+	t.Run("marks the name of the person the page is for, and the name of the author of every post and comment, with stable markers", func(t *testing.T) {
 		post := model.TimelinePost{Post: model.Post{ID: "p_1", Created: model.Time{T: now}, Body: "Cake"}, AuthorName: "Thomas"}
 		comment := model.TimelineComment{Comment: model.Comment{ID: "c_1", Created: model.Time{T: now}, PostID: "p_1", Body: "Yes"}, AuthorName: "Ada"}
 		doc, err := nethtml.Parse(strings.NewReader(render(t, Group{
@@ -272,16 +274,6 @@ func TestGroupPage(t *testing.T) {
 	})
 }
 
-// attributeOK of the given element with the given name, and whether it has one.
-func attributeOK(n *nethtml.Node, key string) (string, bool) {
-	for _, a := range n.Attr {
-		if a.Key == key {
-			return a.Val, true
-		}
-	}
-	return "", false
-}
-
 // attribute of the given element with the given name, or empty if it has none.
 func attribute(n *nethtml.Node, key string) string {
 	for _, a := range n.Attr {
@@ -364,6 +356,42 @@ func TestComposer(t *testing.T) {
 	t.Run("has the field take no focus otherwise", func(t *testing.T) {
 		form := render(t, html.Composer(html.ComposerProps{Token: "q6urq6urq6urq6urq6urqw", Message: "Refused."}))
 		is.True(t, !strings.Contains(form, "data-init"), form)
+	})
+
+	t.Run("is one line tall, and keeps the height a script gave its field when it is put on the page again", func(t *testing.T) {
+		for _, form := range []Node{html.Composer(html.ComposerProps{}), html.CommentForm(html.CommentFormProps{PostID: "p_1"})} {
+			field := textareaOf(t, form)
+			is.Equal(t, "1", attribute(field, "rows"))
+			is.Equal(t, "style", attribute(field, "data-preserve-attr"))
+		}
+	})
+
+	t.Run("has its button stay off when it is put on the page again while its request is on its way", func(t *testing.T) {
+		for _, form := range []string{
+			render(t, html.Composer(html.ComposerProps{})),
+			render(t, html.CommentForm(html.CommentFormProps{PostID: "p_1"})),
+			render(t, html.EarlierPosts(html.EarlierPostsProps{Next: "abc"})),
+		} {
+			is.True(t, regexp.MustCompile(`<button type="submit" data-preserve-attr="disabled"`).MatchString(form), form)
+		}
+	})
+
+	t.Run("has the browser leave the hidden fields as they are when it shows the page again", func(t *testing.T) {
+		doc, err := nethtml.Parse(strings.NewReader(render(t, Group{
+			html.Composer(html.ComposerProps{Token: "q6urq6urq6urq6urq6urqw"}),
+			html.CommentForm(html.CommentFormProps{PostID: "p_1", Token: "q6urq6urq6urq6urq6urqw"}),
+			html.EarlierPosts(html.EarlierPostsProps{Next: "abc"}),
+		})))
+		is.NotError(t, err)
+
+		var hidden int
+		for n := range doc.Descendants() {
+			if n.Type == nethtml.ElementNode && attribute(n, "type") == "hidden" && attribute(n, "name") != "post" {
+				hidden++
+				is.Equal(t, "off", attribute(n, "autocomplete"), attribute(n, "name"))
+			}
+		}
+		is.Equal(t, 7, hidden)
 	})
 }
 
@@ -450,11 +478,12 @@ func TestTimelinePosts(t *testing.T) {
 		is.Equal(t, "", attribute(articles[1], "data-init"))
 
 		// The post that takes the focus is not outlined as a control would be.
-		is.True(t, slices.Contains(strings.Fields(attribute(articles[0], "class")), "outline-none"), attribute(articles[0], "class"))
-		is.True(t, !slices.Contains(strings.Fields(attribute(articles[1], "class")), "outline-none"), attribute(articles[1], "class"))
+		// It keeps an outline only where the system draws its own colours.
+		is.True(t, slices.Contains(strings.Fields(attribute(articles[0], "class")), "outline-hidden"), attribute(articles[0], "class"))
+		is.True(t, !slices.Contains(strings.Fields(attribute(articles[1], "class")), "outline-hidden"), attribute(articles[1], "class"))
 	})
 
-	t.Run("says the comments are loading until they come, and hides the form to add one until then, so that the two show together", func(t *testing.T) {
+	t.Run("says the comments are loading until they come, and hides the form to add one until then, so that the two show together, but neither without JavaScript", func(t *testing.T) {
 		doc, err := nethtml.Parse(strings.NewReader(render(t, html.TimelinePosts(posts[:1], html.PostsProps{}))))
 		is.NotError(t, err)
 
@@ -470,12 +499,12 @@ func TestTimelinePosts(t *testing.T) {
 		}
 		is.True(t, comments != nil && form != nil)
 
-		_, loading := attributeOK(comments, "data-loading")
-		is.True(t, loading, "the place for the comments is not marked as loading")
+		is.True(t, slices.ContainsFunc(comments.Attr, func(a nethtml.Attribute) bool { return a.Key == "data-loading" }), "the place for the comments is not marked as loading")
 		is.Equal(t, "Loading comments", comments.FirstChild.FirstChild.Data)
+		is.True(t, slices.Contains(strings.Fields(attribute(comments.FirstChild, "class")), "noscript:hidden"), attribute(comments.FirstChild, "class"))
 		is.True(t, slices.Contains(strings.Fields(attribute(comments, "class")), "peer"), attribute(comments, "class"))
 		is.True(t, form.PrevSibling == comments, "the form does not come right after the comments")
-		is.True(t, slices.Contains(strings.Fields(attribute(form, "class")), "peer-data-loading:hidden"), attribute(form, "class"))
+		is.True(t, slices.Contains(strings.Fields(attribute(form, "class")), "[@media(scripting:enabled)]:peer-data-loading:hidden"), attribute(form, "class"))
 	})
 
 	t.Run("has no post take the focus otherwise", func(t *testing.T) {
@@ -573,8 +602,8 @@ func TestEarlierPosts(t *testing.T) {
 	t.Run("sends the cursor and the days in the body of a post, and has no button at the end of the timeline", func(t *testing.T) {
 		form := render(t, html.EarlierPosts(html.EarlierPostsProps{Next: "abc", Days: []model.Date{{Year: 2031, Month: 3, Day: 14}, {Year: 2031, Month: 3, Day: 13}}}))
 		is.True(t, strings.Contains(form, `<form id="earlier" method="post" action="/posts/earlier"`), form)
-		is.True(t, strings.Contains(form, `<input type="hidden" name="after" value="abc">`), form)
-		is.True(t, strings.Contains(form, `<input type="hidden" name="days" value="2031-03-14,2031-03-13">`), form)
+		is.True(t, strings.Contains(form, `<input type="hidden" name="after" autocomplete="off" value="abc">`), form)
+		is.True(t, strings.Contains(form, `<input type="hidden" name="days" autocomplete="off" value="2031-03-14,2031-03-13">`), form)
 		is.True(t, regexp.MustCompile(`<button type="submit"[^>]*>Earlier posts</button>`).MatchString(form), form)
 
 		form = render(t, html.EarlierPosts(html.EarlierPostsProps{Days: []model.Date{{Year: 2031, Month: 3, Day: 14}}}))

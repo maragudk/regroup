@@ -93,7 +93,7 @@ func GroupPage(props GroupPageProps) Node {
 		Announcement("", ""),
 
 		// While a request from the page is on its way, the buttons of what sent it are off, so that the
-		// same thing cannot be sent twice. A button can be off for more than one request at a time, such
+		// same thing cannot be sent twice. An answer that puts the button back on the page keeps it off. A button can be off for more than one request at a time, such
 		// as the button of a comment on its way while its post's comments open, so each button counts the
 		// requests it is off for, and comes on again only when the last of them has been answered. If a
 		// request fails, this says so, until the next request starts.
@@ -201,15 +201,17 @@ func Composer(props ComposerProps) Node {
 		fieldID += "-" + props.Fresh
 	}
 
+	// The hidden fields describe this page and this form, so the browser does not fill them in again
+	// when it shows the page anew, as it can after a reload.
 	return Form(ID("composer"), Method("post"), Action("/posts"), Class(postColumn),
 		data.On("submit", "@post('/posts', "+request+")"+sent),
-		Input(Type("hidden"), Name("days"), Value(joinDays(props.Days))),
-		Input(Type("hidden"), Name("field"), Value(props.Fresh)),
-		Input(Type("hidden"), Name("token"), Value(props.Token)),
+		Input(Type("hidden"), Name("days"), AutoComplete("off"), Value(joinDays(props.Days))),
+		Input(Type("hidden"), Name("field"), AutoComplete("off"), Value(props.Fresh)),
+		Input(Type("hidden"), Name("token"), AutoComplete("off"), Value(props.Token)),
 		Div(Class("flex items-end gap-2"),
 			Label(For(fieldID), Class("sr-only"), Text("Write to the group")),
 			textarea(fieldID, "Write to the group", props.Body, props.Message != "", props.Message+props.Notice != "", "composer-message", "min-h-[52px] px-[22px] py-3", focus(props.Focus, props.Token)),
-			Button(Type("submit"),
+			Button(Type("submit"), data.PreserveAttr("disabled"),
 				Class("inline-flex h-[52px] shrink-0 cursor-pointer items-center rounded-full bg-primary-500 px-[22px] text-stone-900 hover:bg-primary-400 active:bg-primary-600 disabled:cursor-default disabled:opacity-60"),
 				Text("Post"),
 			),
@@ -227,13 +229,15 @@ func joinDays(days []model.Date) string {
 	return strings.Join(values, ",")
 }
 
-// textarea that is one line tall, and grows with what is written in it: by itself where the browser
-// can size a field to its content, and by the app's script where it cannot. It is described by the
-// message with the given ID if it has one. The given extra goes on it too.
+// textarea that is one line tall, and grows with what is written in it where the browser can size a
+// field to its content. Elsewhere a script can set its height, which is kept when the field is put on
+// the page again. It is described by the message with the given ID if it has one. The given extra goes
+// on it too.
 func textarea(id, placeholder, value string, invalid, described bool, messageID, class string, extra Node) Node {
 	return Textarea(ID(id), Name("body"), Rows("1"), Placeholder(placeholder),
 		If(invalid, Aria("invalid", "true")),
 		If(described, Aria("describedby", messageID)),
+		data.PreserveAttr("style"),
 		extra,
 		Class("field-sizing-content max-h-[50vh] w-full min-w-0 resize-none rounded-[26px] border border-stone-500 bg-white leading-[26px] text-stone-900 caret-primary-700 placeholder:text-stone-500 hover:border-stone-900 focus-visible:border-primary-700 focus-visible:-outline-offset-1 "+class),
 		// The browser drops a line break right after the opening tag, so one goes first.
@@ -298,8 +302,8 @@ func DayHeading(day model.TimelineDay, now time.Time) Node {
 		date = day.Date.Time().Format("Monday 2 January 2006")
 	}
 
-	// A heading is one word in the serif, with the rest in the sans beside it, so that it stays on one
-	// line on a phone. A date written out is all in the serif on a wider screen.
+	// A heading is one word in the serif, with the rest in the sans beside it, so that it is one line of
+	// large type on a phone. A date written out is all in the serif on a wider screen.
 	class := "mb-6 flex flex-wrap items-baseline gap-x-5 gap-y-2 font-serif text-[40px]/none font-[620] tracking-[-0.015em] lg:mb-7 lg:text-[64px]/none"
 	var heading Node
 	switch {
@@ -336,12 +340,13 @@ func TimelinePosts(posts []model.TimelinePost, props PostsProps) Node {
 
 		// A post that takes the focus can have it, and takes it when it is on the page, unless the person
 		// put the focus somewhere while waiting, such as in a field: anywhere but on nothing, or on the
-		// control that loads earlier posts. It is a whole post, not a control, so it has no focus ring.
+		// control that loads earlier posts. It is a whole post, not a control, so it has no focus ring,
+		// except where the system draws its own colours.
 		var takesFocus Node
 		class := "mb-9 grid grid-cols-1 gap-y-2 lg:grid-cols-[200px_608px] lg:items-baseline lg:gap-x-8"
 		if focus {
 			takesFocus = Group{TabIndex("-1"), data.Init("(document.activeElement === document.body || !!document.activeElement?.closest('#earlier')) && el.focus()")}
-			class += " outline-none"
+			class += " outline-hidden"
 			focus = false
 		}
 
@@ -359,11 +364,15 @@ func TimelinePosts(posts []model.TimelinePost, props PostsProps) Node {
 
 				// Opening the comments posts the small form below, found by this element's own ID. So
 				// the post's ID is in the body of the request, not in its URL, and not in the expression.
-				// Only one opening is on its way at a time: the first answer records that the reader
-				// opened the comments, so a second one sent meanwhile would come without the marks of
-				// what is new and replace the first before the reader saw them.
+				//
+				// The comments that come in answer are marked as new or not, and an answer to a later
+				// request may mark them differently, so nothing replaces them before the reader has seen
+				// them: nothing is sent while a request about these comments is on its way, which turns
+				// the button below off, and an answer that came while the comments were closed is shown
+				// when they are opened again, instead of asking again. If the answer does not come, the
+				// comments no longer say they are loading.
 				Details(ID("post-"+id+"-thread"), Class("mt-2"),
-					data.On("toggle", "el.open && !el.opening && (el.opening = @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'})"+sent+".finally(() => el.opening = null))"),
+					data.On("toggle", "if (el.open && !el.opening && !el.querySelector('button:disabled')) { if (el.unseen) { el.unseen = false } else { el.opening = @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'})"+sent+".finally(() => { const loading = el.querySelector('[data-loading]'); loading && (loading.removeAttribute('data-loading'), loading.replaceChildren()); el.opening = null; el.unseen = !el.open && !loading }) } }"),
 					// The summary is a line of small text, and its hit area reaches above and below it
 					// to be 44 pixels tall, without taking up more room.
 					Summary(Class("group relative inline-flex cursor-pointer list-none rounded-sm text-[15px]/6 text-stone-600 before:absolute before:inset-x-0 before:-top-2 before:-bottom-3 hover:text-stone-900 [&::-webkit-details-marker]:hidden"),
@@ -418,16 +427,16 @@ type CommentsProps struct {
 	// Now in the group's time zone.
 	Now time.Time
 
-	// Loading, if true, is the place for the comments before they have come, which says that they are
-	// on their way. The form to add a comment, which comes after it, is hidden until they have come, so
-	// that the comments and the form show together.
+	// Loading, if true, makes this the place for the comments before they have come, which says that
+	// they are on their way. A [CommentForm] right after it is hidden until then, so that the comments
+	// and the form show together. Without JavaScript, nothing says they are loading, and the form shows.
 	Loading bool
 }
 
 // Comments of a post, in their place under it.
 func Comments(props CommentsProps) Node {
 	return Div(ID("post-"+props.PostID.String()+"-comments"), Class("peer"),
-		If(props.Loading, Group{Data("loading", ""), P(Class("text-[15px]/6 text-stone-600"), Text("Loading comments"))}),
+		If(props.Loading, Group{Data("loading", ""), P(Class("text-[15px]/6 text-stone-600 noscript:hidden"), Text("Loading comments"))}),
 		If(len(props.Comments) > 0,
 			Ol(Class("mb-5 grid gap-4 motion-safe:animate-fade-in"),
 				Map(props.Comments, func(c model.TimelineComment) Node {
@@ -497,15 +506,15 @@ func CommentForm(props CommentFormProps) Node {
 	}
 	messageID := "post-" + id + "-comment-message"
 
-	return Form(ID("post-"+id+"-comment-form"), Method("post"), Action("/comments"), Class("peer-data-loading:hidden"),
+	return Form(ID("post-"+id+"-comment-form"), Method("post"), Action("/comments"), Class("[@media(scripting:enabled)]:peer-data-loading:hidden"),
 		data.On("submit", "@post('/comments', "+request+")"+sent),
 		Input(Type("hidden"), Name("post"), Value(id)),
-		Input(Type("hidden"), Name("field"), Value(props.Fresh)),
-		Input(Type("hidden"), Name("token"), Value(props.Token)),
+		Input(Type("hidden"), Name("field"), AutoComplete("off"), Value(props.Fresh)),
+		Input(Type("hidden"), Name("token"), AutoComplete("off"), Value(props.Token)),
 		Div(Class("flex items-end gap-2"),
 			Label(For(fieldID), Class("sr-only"), Text("Write a comment")),
 			textarea(fieldID, "Write a comment", props.Body, props.Message != "", props.Message+props.Notice != "", messageID, "min-h-11 px-[18px] py-2", focus(props.Focus, props.Token)),
-			Button(Type("submit"), Class(secondaryButton+" h-11"), Text("Comment")),
+			Button(Type("submit"), data.PreserveAttr("disabled"), Class(secondaryButton+" h-11"), Text("Comment")),
 		),
 		message(messageID, cmp.Or(props.Message, props.Notice)),
 	)
@@ -523,8 +532,8 @@ type EarlierPostsProps struct {
 	// Days that the page has a heading for at its end, newest first. The form sends them along.
 	Days []model.Date
 
-	// Posts is whether the timeline above has any posts. If it has, and there is no page to load, the
-	// timeline ends with a line that says nothing was posted before.
+	// Posts is whether the timeline has any posts. If it has, and there is no page to load, the control
+	// is a line that says nothing was posted before.
 	Posts bool
 }
 
@@ -535,9 +544,9 @@ func EarlierPosts(props EarlierPostsProps) Node {
 		data.On("submit", "@post('/posts/earlier', "+request+")"+sent),
 		data.Indicator("_loadingEarlier"),
 		If(props.Next != "", Group{
-			Input(Type("hidden"), Name("after"), Value(props.Next)),
-			Input(Type("hidden"), Name("days"), Value(joinDays(props.Days))),
-			Button(Type("submit"), Class(secondaryButton+" h-11"),
+			Input(Type("hidden"), Name("after"), AutoComplete("off"), Value(props.Next)),
+			Input(Type("hidden"), Name("days"), AutoComplete("off"), Value(joinDays(props.Days))),
+			Button(Type("submit"), data.PreserveAttr("disabled"), Class(secondaryButton+" h-11"),
 				data.Text("$_loadingEarlier ? 'Loading earlier posts' : 'Earlier posts'"),
 				Text("Earlier posts"),
 			),

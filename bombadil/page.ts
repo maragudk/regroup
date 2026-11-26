@@ -3,8 +3,8 @@
 //
 // The page has stable markers for what is read here (see steps 3 and 7 of
 // docs/diary/2026-11-26-first-group-page.md), among them data-person on the name of the person signed
-// in and data-author on the name of the author of a post or a comment. The one thing still found by
-// the page's structure is the label of a post's count of comments.
+// in and data-author on the name of the author of a post or a comment. The label of a post's count of
+// comments is still found by the page's structure, and the end of the timeline by its words.
 
 // ---- What is on the page ----
 
@@ -104,13 +104,18 @@ export const commentMaxLength = 2_000;
 
 export type Cleaned = { body: string } | { refused: string };
 
+// visible matches a character a reader can see, by the rule of model.visible: not white space, not
+// default-ignorable, not another format character than a prepended concatenation mark, and not one of
+// the few that fonts draw blank.
+const visible = /[\u{600}-\u{605}\u{6DD}\u{70F}\u{890}\u{891}\u{8E2}\u{110BD}\u{110CD}]|[^\p{White_Space}\p{Default_Ignorable_Code_Point}\p{Cf}\u{2800}\u{1D159}\u{13441}\u{13442}\u{16FE4}]/u;
+
 // clean a body by the rules of model.CleanPostBody and model.CleanCommentBody, as the browser sends it:
-// whitespace is the Unicode White_Space property, control characters the Cc category, and invisible
-// formatting the Cf category. The browser sends a lone surrogate as U+FFFD.
+// whitespace is the Unicode White_Space property, control characters the Cc category, and a body with
+// nothing [visible] in it is empty. The browser sends a lone surrogate as U+FFFD.
 export function clean(raw: string, maxLength: number): Cleaned {
   let body = raw.toWellFormed().replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   body = body.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
-  if (!/[^\p{White_Space}\p{Cf}]/u.test(body)) return { refused: "empty" };
+  if (!visible.test(body)) return { refused: "empty" };
   if (/\p{Cc}/u.test(body.replace(/[\n\t]/g, ""))) return { refused: "invalid" };
   if ([...body].length > maxLength) return { refused: "too long" };
   return { body };
@@ -345,6 +350,15 @@ export function recorder(window: Window): Recorder {
   return r;
 }
 
+// buttonProblems: the button of a form whose request is on its way is off, and so is the button of the
+// comment form of a post whose comments are on their way.
+export function buttonProblems(r: Recorder, document: Document): string[] {
+  return r.pending.flatMap((p) => {
+    const button = p.started ? document.getElementById(p.element)?.querySelector<HTMLButtonElement>("button[type=submit]") : null;
+    return button && !button.disabled ? [p.element + " has its button on while its request is on its way"] : [];
+  });
+}
+
 // overdue requests: sent more than the given time ago, and not answered.
 export function overdue(r: Recorder, millis: number): string[] {
   const now = Date.now();
@@ -489,8 +503,8 @@ export function privacyProblems(window: Window, document: Document): string[] {
   return problems;
 }
 
-// ownNewProblems: nothing a person wrote carries a "new" mark for them. The names are found by the page's
-// structure, so a name that cannot be found is a problem too, rather than a check that quietly passes.
+// ownNewProblems: nothing a person wrote carries a "new" mark for them. The names are found by their
+// markers, and a name that cannot be found is a problem too, rather than a check that quietly passes.
 export function ownNewProblems(document: Document): string[] {
   if (!isGroupPage(document)) return [];
   const me = personName(document);
