@@ -180,3 +180,110 @@ Validate with `make test`, `make lint`, and `go test -race -shuffle on -tags sql
 - For the stateful hegel builder: `sqlitetest.NewDatabase` needs `*testing.T`, so a case cannot get a fresh database. Reset by deleting `comment_reads`, `comments`, and `posts`; the counters in `sequences` keep counting, which is fine. Model read state per reader as `basis`, `looked`, `joinedCommentSeq`, and the last opening per post.
 - `sqlite.Database.GetComments` has no paging.
 - `/jobs/email.go` logs an email address (`"email", jd.Email`). That is template code I did not touch.
+
+## Step 3: The group page
+
+**Author:** builder
+
+### Prompt Context
+
+**Verbatim prompt:** The lead's brief, which opens: "You are the second builder on regroup's group page. The timeline's data and rules are built and tested. Build the page itself on top of them, in the settled design, with tests."
+**Interpretation:** Build the page at `/` for a signed-in member, in the look of the chosen sketch: the sign, the composer, the timeline by day, comments in place, earlier posts, and a page that says only "This group is private." to everyone else. Serve the fonts ourselves, make Datastar work under the strict content security policy, and prove each rule with tests that fail when the rule is broken.
+**Inferred intent:** Give Markus a first page he can use on the preview and judge from screenshots, with tests that carry the trust, and leave the next builders (generated histories, bombadil) something stable to hold on to.
+
+### What I did
+
+The page is `html.GroupPage` and its parts in `/html/group.go`, on a document shell in `/html/common.go`. The routes are in `/http/timeline.go`, registered by `http.InjectHTTPRouter` in `/http/routes.go`, which now takes the group, the clock, and an optional extra for pages to show. `/http/datastar.go` writes the answers to Datastar. `/http/home.go` and `/html/home.go` are gone.
+
+- **Routes.** `GET /` is the group page and the reader's look. `POST /posts` creates a post, `POST /posts/earlier` loads the page after a cursor, `POST /comments/open` opens a post's comments, and `POST /comments` adds one. Each of the four answers Datastar with `datastar-patch-elements` events and takes no look.
+- **The Datastar fault.** I upgraded glue to `v0.0.0-20261125112408-fc1c4e59c3de`, which brings httph v0.4.1. `http.CSP` sets `ScriptNonce`, so every response gets a fresh nonce in `script-src`, and `html.document` puts it on the `html` element with `data.Nonce`, which switches Datastar to compiling expressions through scripts with that nonce instead of `Function`. The policy is `script-src 'self' 'nonce-…'` and never has `unsafe-eval`. The setting `CSP_ALLOW_UNSAFE_EVAL` is removed, and `.env.example` now has `CSP_ALLOW_UNSAFE_INLINE=false`, since no page needs inline styles. Pages are sent with `Cache-Control: no-store`.
+- **Fonts.** Fraunces and Source Sans 3 are in `/public/styles/fonts` with their licence texts, preloaded by every page, and declared in `/tailwind.css`. The Monaspace fonts are removed. The primary colour names point at Tailwind's orange.
+- **Preview.** `preview.PeopleLink` is the link to `/preview`, shown beside the person's name on the sign ("Switch person") and under the sign on the private page. `/cmd/app/preview_test.go` now also proves that the default binary has neither wording.
+- **A member count.** The sign shows "14 members", so I added `service.Fat.GetMembers` and `sqlite.Database.CountActiveUsers`.
+- **To-do notes.** `/docs/todo/verification.md` no longer lists the Datastar fault, and says what bombadil can now hold on to.
+
+Decided by me, for the lead and Markus to overrule:
+
+- Reading goes by POST. A request's URL is recorded on its trace next to who made it, so a `GET /posts/{id}/comments` would be a record of whose comments someone opened. The post's ID and the cursor are sent in the body instead. It also means another site cannot make a member's browser clear their marks.
+- Each form names the days the page has headings for (`days`, at most three: the first three for the composer, the last three for earlier posts). The server needs this to put a post under a heading that is there, and it has no other way to know what a page shows. When a post starts a new day at the top, the headings of the named days come again with what is true now, so a page left open overnight does not end up with two "Today".
+- A field is emptied after a post by giving it a new ID (`composer-body-<post ID>`), sent back in `field`. Datastar's morph keeps what is typed in a field whose ID stays, which is what a refusal wants, and replaces a field whose ID changes.
+- A refused body answers Datastar with 200 and the form again, because Datastar ignores the body of any other status. Without Datastar it is a 422 page. A request too large to read (over 1 MiB) is 413, a cursor that is not one is 400, and someone not signed in gets the private page with 401 from the POST routes and with 200 from `/`.
+- Without JavaScript, a post or a comment is still made and answered with a redirect to `/`. Opening comments and earlier posts answer "That needs JavaScript" and do nothing, since a redirect would have been a look.
+- Every request from the page is sent once (`retryMaxCount: 0`), so a lost answer cannot post twice by itself, and does not end another request to the same URL (`requestCancellation: 'disabled'`). While one is on its way the buttons of what sent it are off. If it fails, a bar at the foot of the window says "That did not go through. Try again, and reload the page if it keeps happening."
+- Wording: "Write to the group", "Post", "Comment" (also the label of a post with no comments), "1 comment", "2 new", "Write a comment", "Earlier posts", "Nothing has been posted yet. The first post goes in the field above.", "Write something first.", "That is too long. A post can be up to 10,000 characters.", "That text has characters that cannot be used here. Remove them and try again."
+- The sign carries "regroup", the member count, and the person's name. It has no notification link. The private page is the same sign with "This group is private." on it, and its title is "regroup". Every page asks search engines not to index it.
+- Times are 24-hour. A comment from another day than today shows its day too ("Yesterday 09:30", "12 March 08:05"), since comments come days after their post.
+- Headings: the group is the `h1`, days are `h2`, and authors of posts are `h3`. Comment authors are not headings.
+- Type: Fraunces at weight 620 for the sign (96px, 44px on a phone) and the days (64px, 40px), 640 for names (36px, 28px), and 680 for comment names (20px). The margin column starts at 1024px. Below that each name sits above its post.
+- Where the sketch and the briefs disagree: the field has a stone 500 border on white, not the sketch's hairline on stone 50, because a hairline does not reach 3:1 against the page. Nothing for events, photos, or notifications is shown.
+- Removed from the template: the "by maragu" footer link, the favicon and manifest links (they pointed at files that do not exist, and there is no logo to draw one from), the `console.log` smoke test, and the dark-mode classes.
+- A request body may be 1 MiB, far more than a post, so that a post that is too long can be read and refused as that.
+
+Stable markers for the next builders: `#composer`, `#timeline`, `#earlier`, `#request-failed` (has the class `hidden` unless a request failed), `section[data-day="2031-03-14"]` with `#day-<date>-heading` and `#day-<date>-posts`, `article[data-post="<id>"]` (also `#post-<id>`), `#post-<id>-thread` (the `details`), `#post-<id>-comments-summary`, `#post-<id>-comments`, `#post-<id>-comment-form`, `li[data-comment="<id>"]`, `[data-body]` on the text of a post or comment, and `[data-mark="new"]` on every "new" mark.
+
+### Why
+
+The brief asks that no trace hold whose comments someone opened, and the template's tracing records every URL. Keeping what is read out of URLs is the only way to keep that promise without changing the tracing. The rest follows from Datastar's morph: the server cannot see the page, so the page has to say the little the server needs.
+
+### What worked
+
+- The browser check, against the preview build with `CSP_ALLOW_UNSAFE_INLINE=false` and no `unsafe-eval`: posting with a line break, an empty and a too-long post (10,001 characters kept in the field), opening comments (the "4 new" left the summary), commenting, a refused comment, a draft kept over closing and opening, two threads opened in the same instant (4 and 1 comments), fourteen posts by keyboard alone, earlier posts (20 then 24 posts, five headings, none twice, no duplicate IDs), the Post button off while a slowed request was on its way, and the failure bar on an aborted request and on a 500. The console had no policy violation and no request left for another host. Its only entries were from the two requests I failed on purpose.
+- Planting faults. Each of these made the named tests fail and passed again when removed:
+  - `Raw(p.Body)` for a post: `TestTimeline_text` (`Expected "<script>alert(1)</script>", but got "alert(1)"`), `FuzzTimeline/seed#2`, and the hegel property in `TestGroupPage`. The same for a comment's body, a name, the group's name, and a field's text.
+  - A signed-out visitor served the page a member just had: `TestTimeline/shows_someone_who_is_not_signed_in_only_that_the_group_is_private` (`Expected "This group is private.", but got "The Loft"`).
+  - A day that goes on getting its heading again: `TestTimeline_earlier` (`Expected "3", but got "2"`).
+  - Also: `unsafe-eval` allowed, no nonce, the nonce not given to Datastar, a stylesheet from a font host, an `@import` in `/tailwind.css`, posting or earlier posts taking a look, the look taken before what can fail, a span naming the post whose comments were opened, the cursor in a URL, the handler logging a body, the post's ID written into an expression, a form not sent through Datastar, the failure listener gone, the fade without `motion-safe:`, `text-orange-700` in a page, and "Switch person" in the default binary.
+- Three reviewers at once: two competing on the code, and one given the code and its contract but not the tests, to find properties. They agreed on most of what follows under "What warrants review".
+
+### What didn't work
+
+- Converting Fraunces to WOFF2 with fonttools: `uvx --from 'fonttools[woff]' …` was refused with "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Undermining Oversight]". Fraunces ships its variable font as TrueType only, so I wrote a small Go program outside the repository that puts the same tables in a WOFF2 container with the `brotli` command, and checked that Chrome loads it with all four axes. `make fonts` names the fonttools command, which I could not run.
+- My first plant for "a signed-out visitor gets post text" did not fail (`ok app/http`): with the handler's check and the service's check both removed, the store still refuses a reader it does not know. The test was fine, the plant was not a leak. I planted a page cached across visitors instead, and added a member's visit before the visitor's to the test.
+- Fuzzing found a real fault after the review: `go test ./http/ -run '^$' -fuzz '^FuzzTimeline$'` failed with "the answer is not valid UTF-8" for a `field` of `"\r\nevent: \xb7"`. A refusal put that value back into the form as it came. Everything put back now goes through `echo`, and the input is a seed and a fixed test.
+- Registering the not-found page again from `http.InjectHTTPRouter`, so that it too gets `no-store`: `timeline_test.go:1086: Expected "no-store", but got ""`. chi sets it on the parent of the group it is called in, and the app's routes are two groups down from the root. I took it out again.
+- A test file came out with real line breaks inside Go string literals (`http/timeline_test.go:293:58: string literal not terminated`), because I spliced a backtick into a JavaScript `String.raw` template and the rest of the template was no longer raw.
+- `playwright-cli run-code` answered "Session closed" whenever a callback in the script used `URL` or `setTimeout`, which its sandbox does not have. `page.waitForTimeout` works.
+- Clicking two summaries with `Promise.all` in the browser check timed out once ("waiting for locator('article')… to be visible"). Opening both in one `page.evaluate` showed that both load.
+- `preview/http.go:19:6: Link already declared through dot-import`, so the link is `preview.PeopleLink`.
+
+### What I learned
+
+- Datastar 1.0.3 cancels a request in flight when another with the same method and URL starts, whatever element sent it. With one URL for opening any post's comments, opening a second post would have left the first one empty, with its marks already used up.
+- Datastar's morph sets a textarea's value only when the new text differs from the old element's `defaultValue`, and it matches elements by tag and ID. That is the whole reason for `field`.
+- Datastar passes `el` to every expression, so an expression can build a selector from the element's own ID, and no ID has to be written into the expression.
+- A carriage return ends a line of a server-sent event. Left in the text of a patch, it would let a name or a body start an event of its own, and Datastar gives scripts in a patch the page's nonce.
+- glue's static files are served from `/images`, `/scripts`, and `/styles` only, so the fonts are under `/styles/fonts`.
+- `template.HTMLEscapeString`, which gomponents uses, turns a NUL into U+FFFD.
+
+### What was tricky
+
+- The server cannot see the page. Whether a day has a heading, whether the timeline is empty, and which field is on it are all facts about the browser. I first sent one date (`newest`), and the reviewers showed where that breaks: after midnight, when the clocks go back past midnight (St. John's, 7 November 2010), and when a request is too large to read and the form came back made from nothing.
+- The stylesheet is built, not committed, and CI runs `go test` without building it. So `TestStylesheet` checks what it is built from (the source, and every Go file Tailwind reads classes from), and the Dockerfile checks the built file itself, which CI's build job runs.
+- Comments under a post had to keep a draft. The form to add one is now on the page from the start, inside the closed `details`, and opening the comments patches the list and the count only.
+
+### What warrants review
+
+Found by both reviewers, and fixed, each with a test that fails without the fix: a request over the size cap answered from an unread form; opening a second post's comments cancelling the first; no test for the Datastar attributes; reads without JavaScript redirecting into a look; a draft lost on reopening; two "Today" after midnight; the trace half of the telemetry rule untested; comments that looked outward; a constant used in one test.
+
+Found by one reviewer, and fixed: one `_sending` signal shared by every form; the post's ID inside an expression; invalid UTF-8 echoed as it came; no line-break guard on a patch's selector and mode; no `main` on the private page; a long name on the sign; the Dockerfile's check passing `image-set("https://…")`; the app's own guards for a user who stops being active never reached by a test; a malformed form never sent by a test; cross-site posts not covered.
+
+Not changed, for the lead:
+
+- `/public/styles/fonts/Fraunces.woff2` is from my own converter, not fonttools. It is the upstream tables unchanged, Chrome loads it, and one reviewer decoded it and found the four axes. Running `make fonts` once would replace it with the usual tool's output, and `TestFonts` holds its checksum.
+- The not-found page carries a nonce but not `no-store`. It has nothing of the group on it. Fixing it belongs in glue.
+- Every page logs a 404 for `/favicon.ico` in the browser's console, as the template did. There is no logo to make one from.
+- A request whose answer is lost has still been done, and "try again" then posts twice. Nothing can be deleted yet. An answer that fails after the comment was stored (`GetComments` after `CreateComment`) is the same.
+- Datastar throws `FetchFailed` as an uncaught error in the console when a request cannot be sent at all.
+- When the last page of earlier posts loads, its button goes away and focus falls to the page. Nothing announces to a screen reader that posts were loaded.
+- A page left open over midnight keeps its "Today" until someone posts or reloads.
+- `service.Fat.CreateComment` cleans the body before it checks the post, so an empty comment on a post that does not exist is answered as empty, not as not found.
+- `/PRODUCT.md` still says the fonts and the indigo colour come from the template.
+
+Validate with `make lint`, `make test`, and `go test -race -shuffle on -tags sqlite_fts5,sqlite_math_functions,sqlite_foreign_keys ./...`. Run `make preview` and open `/preview`. The screenshots are in the session's scratchpad under `a2-shots`.
+
+### Future work
+
+- For the stateful hegel builder: `newApp` in `/http/timeline_test.go` is the app behind the server's middleware on a real database, with a clock to set, `signIn`, `post`, `patches`, and a `store` that can be made to fail. `http.DecodePatches` reads the events as a browser does. Send `days` as the page would, or leave it out: the cursor alone covers every zone whose dates do not go backwards.
+- For bombadil: sign in at `/preview`. "Switch person" is a link it can follow, which changes who it is. A failed request shows `#request-failed` without the class `hidden`.
+- An idempotency token for posts and comments, so that trying again cannot post twice.
+- A favicon, once there is a logo.

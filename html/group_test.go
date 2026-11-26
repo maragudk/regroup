@@ -115,79 +115,90 @@ func TestGroupPage(t *testing.T) {
 		is.EqualSlice(t, []string{"/posts", "/comments/open", "/comments", "/posts/earlier"}, forms)
 	})
 
-	t.Run("shows any body that can be posted as exactly that text, in a post, in a comment, and in a field, and never as an element", func(t *testing.T) {
-		elements := func(body string) (int, *nethtml.Node) {
-			post := model.TimelinePost{Post: model.Post{ID: "p_1", Created: model.Time{T: now}, Body: body}, AuthorName: "Signe"}
-			comment := model.TimelineComment{Comment: model.Comment{ID: "c_1", Created: model.Time{T: now}, PostID: "p_1", Body: body}, AuthorName: "Thomas"}
+	t.Run("shows any body that can be posted, and any name, as exactly that text, wherever it comes out, and never as an element or an attribute", func(t *testing.T) {
+		// page with the given body as a post, a comment, and what was typed in both fields, and the given
+		// name as the group, the person, both authors, and the part of both fields' IDs that is sent in.
+		// It returns how many elements and attributes the page has, and the page.
+		page := func(body, name string) (int, int, *nethtml.Node) {
+			post := model.TimelinePost{Post: model.Post{ID: "p_1", Created: model.Time{T: now}, Body: body}, AuthorName: name}
+			comment := model.TimelineComment{Comment: model.Comment{ID: "c_1", Created: model.Time{T: now}, PostID: "p_1", Body: body}, AuthorName: name}
 
-			page := render(t, Group{
+			doc, err := nethtml.Parse(strings.NewReader(render(t, Group{
 				html.GroupPage(html.GroupPageProps{
-					GroupName: "The Loft",
+					GroupName: name,
+					UserName:  name,
 					Now:       now,
 					Timeline:  model.Timeline{Days: []model.TimelineDay{{Date: model.DateOf(now), Today: true, Posts: []model.TimelinePost{post}}}},
-					Composer:  html.ComposerProps{Body: body, Message: "Refused."},
+					Composer:  html.ComposerProps{Body: body, Message: "Refused.", Fresh: name},
 				}),
 				html.Comments(html.CommentsProps{PostID: "p_1", Comments: []model.TimelineComment{comment}, Now: now}),
-				html.CommentForm(html.CommentFormProps{PostID: "p_1", Body: body, Message: "Refused."}),
-			})
-
-			doc, err := nethtml.Parse(strings.NewReader(page))
+				html.CommentForm(html.CommentFormProps{PostID: "p_1", Body: body, Message: "Refused.", Fresh: name}),
+			})))
 			is.NotError(t, err)
 
-			var count int
+			var elements, attributes int
 			for n := range doc.Descendants() {
 				if n.Type == nethtml.ElementNode {
-					count++
+					elements++
+					attributes += len(n.Attr)
 				}
 			}
-			return count, doc
+			return elements, attributes, doc
 		}
 
-		plain, _ := elements("Cake")
+		plainElements, plainAttributes, _ := page("Cake", "Signe")
 
 		hegel.Test(t, func(ht *hegel.T) {
 			body, err := model.CleanPostBody(hegel.Draw(ht, markup()))
 			ht.Assume(err == nil)
+			name := hegel.Draw(ht, markup())
+			ht.Assume(name != "")
 
-			count, doc := elements(body)
-			if count != plain {
-				ht.Fatalf("the body %q changed the number of elements on the page from %v to %v", body, plain, count)
+			// A browser reading HTML makes a line feed of every carriage return, and shows the replacement
+			// character for a NUL. A body has neither, but nothing says that of a name.
+			shown := strings.NewReplacer("\r\n", "\n", "\r", "\n", "\x00", "\ufffd").Replace(name)
+
+			elements, attributes, doc := page(body, name)
+			if elements != plainElements || attributes != plainAttributes {
+				ht.Fatalf("the body %q and the name %q changed the page from %v elements and %v attributes to %v and %v", body, name, plainElements, plainAttributes, elements, attributes)
 			}
 
-			var bodies, fields int
+			var bodies, fields, names, ids int
 			for n := range doc.Descendants() {
 				if n.Type != nethtml.ElementNode {
 					continue
 				}
 
-				var isBody bool
-				for _, a := range n.Attr {
-					isBody = isBody || a.Key == "data-body"
-				}
-				if !isBody && n.Data != "textarea" {
+				var expected string
+				switch {
+				case n.Data == "textarea" && n.FirstChild == nil:
+					// The empty field for a comment under the post.
 					continue
-				}
-
-				// The page also has the empty field for a comment under the post.
-				if n.Data == "textarea" && n.FirstChild == nil {
+				case n.Data == "textarea":
+					fields++
+					expected = body
+					if strings.HasSuffix(attribute(n, "id"), "-"+shown) {
+						ids++
+					}
+				case attribute(n, "data-body") != "" || len(n.Attr) > 0 && n.Attr[0].Key == "data-body":
+					bodies++
+					expected = body
+				case n.Data == "h1" || n.Data == "h3" || n.Data == "title":
+					names++
+					expected = shown
+				default:
 					continue
 				}
 
 				if n.FirstChild == nil || n.FirstChild != n.LastChild || n.FirstChild.Type != nethtml.TextNode {
-					ht.Fatalf("the body %q did not come out as one piece of text in %v", body, n.Data)
+					ht.Fatalf("%q or %q did not come out as one piece of text in %v", body, name, n.Data)
 				}
-				if n.FirstChild.Data != body {
-					ht.Fatalf("the body %q came out as %q in %v", body, n.FirstChild.Data, n.Data)
-				}
-
-				if isBody {
-					bodies++
-				} else {
-					fields++
+				if n.FirstChild.Data != expected {
+					ht.Fatalf("expected %q in %v, got %q", expected, n.Data, n.FirstChild.Data)
 				}
 			}
-			if bodies != 2 || fields != 2 {
-				ht.Fatalf("expected the body %q in a post, a comment, and two fields, but found it in %v and %v", body, bodies, fields)
+			if bodies != 2 || fields != 2 || names != 3 || ids != 2 {
+				ht.Fatalf("expected %q in a post, a comment, and two fields, and %q in three places and two IDs, but found %v, %v, %v, and %v", body, name, bodies, fields, names, ids)
 			}
 		})
 	})
