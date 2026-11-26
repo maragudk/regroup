@@ -1,0 +1,214 @@
+name: Nightly
+
+# The tests that generate their own cases, for longer than a pull request waits for: the stateful
+# history tests with many more histories of more steps, each fuzz target for a few minutes, and the whole
+# test suite under the race detector, shuffled and run three times. It runs on main every night, and
+# when started by hand. A failure on main opens an issue labelled "nightly", or comments on the one that
+# is open. It is not a merge gate. Bombadil, which explores the app in a browser, has a workflow of its
+# own.
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+    inputs:
+      history-cases:
+        description: How many histories each stateful history test generates
+        default: "2000"
+      history-steps:
+        description: How many steps each history takes
+        default: "100"
+      fuzz-time:
+        description: How long each fuzz target runs, such as 30s, 4m, or 1h
+        default: 4m
+
+# A run that is still going when the next one starts finishes first.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # With pipefail, so that go test failing is not hidden by tee keeping its log.
+    shell: bash
+
+env:
+  GO_TAGS: sqlite_fts5,sqlite_math_functions,sqlite_foreign_keys
+
+jobs:
+  targets:
+    # Lists the fuzz targets, so that a new one is fuzzed without anyone adding it here.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: List the fuzz targets
+        id: list
+        run: |
+          # Assigned first, so that the step fails if the script does.
+          matrix="$(.github/scripts/fuzz-targets.sh)"
+          echo "matrix=$matrix" >>"$GITHUB_OUTPUT"
+
+  history:
+    runs-on: ubuntu-latest
+    # 2000 histories of 100 steps took about 15 minutes locally, with the two packages in parallel.
+    timeout-minutes: 50
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Start the test S3 server
+        # The same local stand-in as make test.
+        run: |
+          ./versitygw.sh up
+          echo "AWS_ENDPOINT_URL=http://localhost:$(./versitygw.sh port versitygw-test)" >>"$GITHUB_ENV"
+
+      - name: Run the stateful history tests for longer
+        env:
+          HISTORY_CASES: ${{ inputs.history-cases || '2000' }}
+          HISTORY_STEPS: ${{ inputs.history-steps || '100' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/nightly"
+          echo "$HISTORY_CASES histories of $HISTORY_STEPS steps each"
+          go test -count=1 -timeout 45m -tags "$GO_TAGS" -run 'TestFat_history|TestTimeline_history' ./service/ ./http/ 2>&1 | tee "$RUNNER_TEMP/nightly/history.log"
+
+      - name: Keep the log
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-history
+          path: ${{ runner.temp }}/nightly/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  fuzz:
+    needs: targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # One target failing does not stop the others from being fuzzed.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    name: fuzz (${{ matrix.name }})
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Fuzz
+        env:
+          FUZZ_TIME: ${{ inputs.fuzz-time || '4m' }}
+          PACKAGE: ${{ matrix.package }}
+          TARGET: ${{ matrix.target }}
+        run: .github/scripts/fuzz.sh "$PACKAGE" "$TARGET" "$FUZZ_TIME" "$RUNNER_TEMP/nightly"
+
+      - name: Keep the log and any failing input
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-fuzz-${{ matrix.name }}
+          path: ${{ runner.temp }}/nightly/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  race:
+    runs-on: ubuntu-latest
+    # A run took about a minute locally.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Start the test S3 server
+        run: |
+          ./versitygw.sh up
+          echo "AWS_ENDPOINT_URL=http://localhost:$(./versitygw.sh port versitygw-test)" >>"$GITHUB_ENV"
+
+      - name: Run the whole test suite under the race detector
+        # The seed is given, and printed first, because go test only prints the one it picks with -v, and a
+        # failure that depends on the order needs it to be run again.
+        run: |
+          mkdir -p "$RUNNER_TEMP/nightly"
+          seed="$(date +%s)"
+          echo "Shuffling with the seed $seed: go test -race -shuffle $seed -count=3 ./..."
+          go test -race -shuffle "$seed" -count=3 -timeout 25m -tags "$GO_TAGS" ./... 2>&1 | tee "$RUNNER_TEMP/nightly/race.log"
+
+      - name: Keep the log
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-race
+          path: ${{ runner.temp }}/nightly/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  report:
+    needs: [targets, history, fuzz, race]
+    if: ${{ failure() && github.ref_name == 'main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # The only job that may write issues. It runs one script from the repository, and the script only
+    # reads the logs.
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/report-nightly.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Get the logs
+        uses: actions/download-artifact@v8.0.2
+        continue-on-error: true
+        with:
+          pattern: nightly-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/nightly
+
+      - name: Open an issue, or comment on the open one
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          LABEL: nightly
+          LOGS: ${{ runner.temp }}/nightly
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TARGETS_RESULT: ${{ needs.targets.result }}
+          HISTORY_RESULT: ${{ needs.history.result }}
+          FUZZ_RESULT: ${{ needs.fuzz.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+        run: .github/scripts/report-nightly.sh
