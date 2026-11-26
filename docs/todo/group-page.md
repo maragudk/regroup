@@ -22,6 +22,13 @@ The page a member opens: the group's timeline. Agreed with Markus on 2026-11-26.
 - Fraunces is set with its softness at full, its leaning letters off, and heavier than in the sketch, towards the weight of Young Serif, which Markus liked.
 - Orange text uses orange 700, because orange 500 on white has too little contrast to read. Orange 500 is for fills and marks.
 
+- What counts as new to a reader. A post by someone else is new if it was posted since the reader's previous look at the timeline. A comment by someone else is new until the reader opens that post's comments. Nothing a person wrote is ever new to them, and nothing from before they joined is new. This is a first version for Markus to try on the preview.
+- Days are grouped in the group's own time zone, which the host sets in the configuration. One instance holds one group, and a group is usually in one place.
+- The first build shows no control for anything that is not built. "Add event", "Add photo", "Coming up", and the notification setting appear when they work.
+- The sign scrolls away with the page. On a phone it is smaller, and each name sits above its post, not in a margin.
+- Posts and comments are plain text with line breaks kept. There is no formatting and no editing yet.
+- The work is split across builders in this order: the timeline's data and rules; the page itself; the generated-history and fuzz tests; bombadil with its CI job and the nightly run; then the design review and the preview.
+
 ## Open
 
 - The layout on a phone.
