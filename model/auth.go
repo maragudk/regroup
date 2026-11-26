@@ -28,7 +28,7 @@ type User struct {
 	Active    bool
 	Role      Role
 
-	// InvitedBy is who invited the person, or nil for the first admin, who was named in the configuration.
+	// InvitedBy is who invited the person, or nil for the first admin, who joined without an invitation.
 	InvitedBy *UserID `db:"invited_by"`
 }
 
@@ -96,8 +96,8 @@ var Actions = []Action{
 	ActionWithdrawInvitation, ActionChangeRole, ActionSeeEmailAddresses,
 }
 
-// rights of the people in the group: which roles may take which action. An action that is not here is
-// one that anyone may take, signed in or not.
+// rights of the people in the group: which roles may take which action. An action that is neither here
+// nor in [public] is one that nobody may take.
 var rights = map[Action][]Role{
 	ActionRead:               {RoleAdmin, RoleModerator, RoleMember},
 	ActionPost:               {RoleAdmin, RoleModerator, RoleMember},

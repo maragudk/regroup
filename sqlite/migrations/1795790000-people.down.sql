@@ -42,5 +42,6 @@ create index roles_permissions_permission_idx on roles_permissions (permission);
 
 insert into users_roles (user_id, role) select id, 'admin' from users where role = 'admin';
 
+drop index users_invited_by_idx;
 alter table users drop column invited_by;
 alter table users drop column role;

@@ -15,12 +15,9 @@ import (
 	"app/model"
 )
 
-// outboxSize is how many emails an [Outbox] keeps, the newest.
-const outboxSize = 100
-
-// Outbox keeps the emails the app would have sent, instead of sending them, so that the preview can show
-// them with links that work. It keeps them in memory, so they are gone when the app stops. It is safe for
-// concurrent use.
+// Outbox keeps the newest hundred emails the app would have sent, instead of sending them, so that the
+// preview can show them with links that work. It keeps them in memory, so they are gone when the app
+// stops. It is safe for concurrent use.
 type Outbox struct {
 	log    *slog.Logger
 	now    func() time.Time
@@ -46,8 +43,8 @@ func (o *Outbox) SendTransactional(ctx context.Context, opts email.SendOptions) 
 	defer o.mu.Unlock()
 
 	o.emails = append(o.emails, keptEmail{at: o.now(), opts: opts})
-	if len(o.emails) > outboxSize {
-		o.emails = o.emails[len(o.emails)-outboxSize:]
+	if len(o.emails) > 100 {
+		o.emails = o.emails[len(o.emails)-100:]
 	}
 
 	o.log.InfoContext(ctx, "Kept an email for the preview instead of sending it", "template", opts.Template)

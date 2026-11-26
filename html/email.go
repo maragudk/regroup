@@ -10,8 +10,9 @@ import (
 //go:embed emails
 var emails embed.FS
 
-// EmailTemplates the app sends: a layout, and an email of each kind in it, written for glue's email
-// sender. Placeholders are words in double curly braces, such as the token in a link.
+// EmailTemplates the app sends: the layout, layout.html, with the placeholder {{body}} for the body, and
+// the body of each kind of email, such as sign-in.html. Placeholders are words in double curly braces,
+// such as {{token}} for the token in a link.
 func EmailTemplates() fs.FS {
 	templates, err := fs.Sub(emails, "emails")
 	if err != nil {

@@ -41,6 +41,8 @@ func TestParseEmailAddress(t *testing.T) {
 		{name: "refuses two addresses", input: "signe@example.com,thomas@example.com", err: model.ErrorEmailInvalid},
 		{name: "refuses a line break inside", input: "signe@example.com\nBcc: x@example.com", err: model.ErrorEmailInvalid},
 		{name: "refuses characters outside ASCII", input: "bjørn@example.com", err: model.ErrorEmailInvalid},
+		{name: "refuses the Kelvin sign, which lowercases to a k", input: "marKus@example.com", err: model.ErrorEmailInvalid},
+		{name: "refuses a capital I with a dot, which lowercases to an i", input: "İda@example.com", err: model.ErrorEmailInvalid},
 		{name: "refuses a domain that starts with a hyphen", input: "signe@-example.com", err: model.ErrorEmailInvalid},
 	}
 
@@ -83,7 +85,7 @@ func TestParseEmailAddress(t *testing.T) {
 				if !errors.Is(err, model.ErrorEmailInvalid) {
 					ht.Fatalf("unexpected error %v", err)
 				}
-				if trimmed := strings.ToLower(strings.TrimSpace(input)); len(trimmed) <= model.EmailAddressMaxLength && emailRule.MatchString(trimmed) {
+				if trimmed := strings.TrimSpace(input); len(trimmed) <= model.EmailAddressMaxLength && emailRule.MatchString(trimmed) {
 					ht.Fatalf("refused %q, which is an address by the rule", input)
 				}
 				return
@@ -345,7 +347,19 @@ func TestLinkToken(t *testing.T) {
 		is.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", model.LinkToken("abc").Hash())
 	})
 
-	t.Run("makes tokens that parse as themselves, and hashes that differ for tokens that differ", func(t *testing.T) {
+	t.Run("makes tokens of 43 characters that parse as themselves", func(t *testing.T) {
+		hegel.Test(t, func(ht *hegel.T) {
+			token, err := model.NewLinkToken(bytes.NewReader(hegel.Draw(ht, hegel.Binary(32, 32))))
+			if err != nil {
+				ht.Fatal(err)
+			}
+			if parsed, err := model.ParseLinkToken(token.String()); err != nil || parsed != token || len(token) != 43 {
+				ht.Fatalf("token %q parsed as %q with %v", token, parsed, err)
+			}
+		})
+	})
+
+	t.Run("hashes tokens that differ to hashes that differ, of 64 lowercase hexadecimal characters", func(t *testing.T) {
 		hegel.Test(t, func(ht *hegel.T) {
 			a, err := model.NewLinkToken(bytes.NewReader(hegel.Draw(ht, hegel.Binary(32, 32))))
 			if err != nil {
@@ -355,13 +369,9 @@ func TestLinkToken(t *testing.T) {
 			if err != nil {
 				ht.Fatal(err)
 			}
-
-			for _, token := range []model.LinkToken{a, b} {
-				if parsed, err := model.ParseLinkToken(token.String()); err != nil || parsed != token {
-					ht.Fatalf("token %q parsed as %q with %v", token, parsed, err)
-				}
-				if len(token) != 43 || len(token.Hash()) != 64 {
-					ht.Fatalf("token %q or its hash %q has the wrong length", token, token.Hash())
+			for _, h := range []string{a.Hash(), b.Hash()} {
+				if len(h) != 64 || strings.Trim(h, "0123456789abcdef") != "" {
+					ht.Fatalf("hash %q is not 64 lowercase hexadecimal characters", h)
 				}
 			}
 			if (a == b) != (a.Hash() == b.Hash()) {

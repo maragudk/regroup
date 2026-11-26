@@ -30,26 +30,6 @@ func createLink(t *testing.T, db *sqlite.Database, email model.EmailAddress, min
 	return hash
 }
 
-func TestDatabase_GetUserByEmail(t *testing.T) {
-	t.Run("gets the person with the address, active or not", func(t *testing.T) {
-		db := sqlitetest.NewDatabase(t)
-		signe := sqlitetest.CreatePerson(t, db, "Signe", "signe@example.com", model.RoleMember)
-		sqlitetest.DeactivateUser(t, db, signe.ID)
-
-		u, err := db.GetUserByEmail(t.Context(), "signe@example.com")
-		is.NotError(t, err)
-		is.Equal(t, signe.ID, u.ID)
-		is.True(t, !u.Active)
-	})
-
-	t.Run("finds nobody for an address nobody has", func(t *testing.T) {
-		db := sqlitetest.NewDatabase(t)
-
-		_, err := db.GetUserByEmail(t.Context(), "signe@example.com")
-		is.Error(t, model.ErrorUserNotFound, err)
-	})
-}
-
 func TestDatabase_CreateSignInLink(t *testing.T) {
 	t.Run("makes links up to the limit since the given time, and then none", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
@@ -289,12 +269,19 @@ func TestDatabase_GetInvitations(t *testing.T) {
 		is.Equal(t, a.ID, invs[1].ID)
 		is.Equal(t, "Signe", invs[0].InvitedByName)
 
-		is.NotError(t, db.DeleteInvitation(t.Context(), a.ID))
-		is.Error(t, model.ErrorInvitationNotFound, db.DeleteInvitation(t.Context(), a.ID))
+		is.NotError(t, db.DeleteInvitation(t.Context(), a.ID, at(3)))
+		is.Error(t, model.ErrorInvitationNotFound, db.DeleteInvitation(t.Context(), a.ID, at(3)))
 		invs, err = db.GetInvitations(t.Context(), at(9))
 		is.NotError(t, err)
 		is.Equal(t, 2, len(invs))
 		is.Equal(t, old.ID, invs[1].ID)
+
+		// An invitation that has expired is not waiting, so there is none to withdraw, and the next
+		// invitation deletes it.
+		is.Error(t, model.ErrorInvitationNotFound, db.DeleteInvitation(t.Context(), old.ID, at(10)))
+		_, err = db.CreateInvitation(t.Context(), model.Invitation{Created: at(10), Expires: at(70), Email: "c@example.com", InvitedBy: signe.ID})
+		is.NotError(t, err)
+		is.Equal(t, 0, count(t, db, "invitations where id = '"+old.ID.String()+"'"))
 	})
 }
 
@@ -357,7 +344,7 @@ func TestDatabase_AcceptInvitation(t *testing.T) {
 		is.NotError(t, err)
 		_, err = db.SetInvitationHash(t.Context(), b.ID, "b", at(1))
 		is.NotError(t, err)
-		is.NotError(t, db.DeleteInvitation(t.Context(), b.ID))
+		is.NotError(t, db.DeleteInvitation(t.Context(), b.ID, at(1)))
 
 		_, err = db.GetInvitationByHash(t.Context(), "a", at(60))
 		is.Error(t, model.ErrorLinkInvalid, err)

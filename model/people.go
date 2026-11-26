@@ -28,11 +28,13 @@ const EmailAddressMaxLength = 254
 //
 // Nothing checks that a mailbox exists.
 func ParseEmailAddress(s string) (EmailAddress, error) {
-	e := EmailAddress(strings.ToLower(strings.TrimSpace(s)))
+	// Checked before lowercasing, since lowercasing turns some characters outside ASCII into ASCII ones,
+	// such as the Kelvin sign into a k. What passes is ASCII, so lowercasing it changes only its case.
+	e := EmailAddress(strings.TrimSpace(s))
 	if len(e) > EmailAddressMaxLength || !e.IsValid() {
 		return "", ErrorEmailInvalid
 	}
-	return e, nil
+	return EmailAddress(strings.ToLower(e.String())), nil
 }
 
 // NameMaxLength in characters (runes), after cleaning with [CleanName].
@@ -46,8 +48,8 @@ const NameMaxLength = 50
 //     follow.
 //   - It must contain no control characters, line breaks and tabs included, no line or paragraph
 //     separators, and no characters that change the direction of the text around them (the bidirectional
-//     embeddings, overrides, and isolates), or [ErrorNameInvalid]. A name goes into sentences and email
-//     subjects, where these would break the line or turn the text after the name around.
+//     controls: the marks, embeddings, overrides, and isolates), or [ErrorNameInvalid]. These would break
+//     the line, or turn the text after the name around.
 //   - It must be at most [NameMaxLength] characters (runes), or [ErrorNameTooLong].
 //
 // Names need not be unique.
@@ -75,8 +77,8 @@ func CleanName(name string) (string, error) {
 	return name, nil
 }
 
-// LinkToken is the secret in a link in an email: a sign-in link or an invitation. Only its [LinkToken.Hash]
-// is stored, so a copy of the database signs nobody in.
+// LinkToken is the secret in a link in an email: a sign-in link or an invitation. Keep only its
+// [LinkToken.Hash], from which the token cannot be found.
 type LinkToken string
 
 // String satisfies [fmt.Stringer].
@@ -86,8 +88,8 @@ func (t LinkToken) String() string {
 
 var _ fmt.Stringer = LinkToken("")
 
-// Hash of the token, which is what is stored and looked up: SHA-256, in lowercase hexadecimal. The token
-// holds 256 random bits, so the hash needs no salt.
+// Hash of the token: SHA-256, in lowercase hexadecimal. The token holds 256 random bits, so the hash
+// needs no salt.
 func (t LinkToken) Hash() string {
 	h := sha256.Sum256([]byte(t))
 	return hex.EncodeToString(h[:])
@@ -119,13 +121,13 @@ func ParseLinkToken(s string) (LinkToken, error) {
 }
 
 const (
-	// SignInLinkLifetime is how long a sign-in link works after it is sent, once.
+	// SignInLinkLifetime is how long a sign-in link works after it is made, once.
 	SignInLinkLifetime = 15 * time.Minute
 
 	// SignInLinksPerHour is how many sign-in links are sent to one address in an hour at most.
 	SignInLinksPerHour = 5
 
-	// InvitationLifetime is how long an invitation works after it is sent, once.
+	// InvitationLifetime is how long an invitation works after it is made, once.
 	InvitationLifetime = 7 * 24 * time.Hour
 )
 

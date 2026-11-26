@@ -7,8 +7,7 @@
 // links' expiry. [Run] draws one with hegel and runs it against a [Driver], which is one level of the app,
 // such as the business logic. After every action it checks what the driver did against the model.
 //
-// The model is plain slices, written from the rules in docs/todo/people.md and the brief of this work,
-// not from the code:
+// The model is plain slices, written from the rules in docs/todo/people.md, not from the code:
 //
 //   - Every person has exactly one role: admin, moderator, or member. The first admin is the address the
 //     configuration names. While the group has nobody in it, that address can get a sign-in link, and
@@ -20,7 +19,7 @@
 //     with it uses up every link to the same address. A person who is not active cannot sign in.
 //   - A moderator or an admin invites an address that is not a person's. The invitation works for 7 days,
 //     once, and inviting the address again replaces it. Moderators and admins see the invitations that
-//     are waiting and withdraw them. Accepting one with a name that can be used makes a new active member,
+//     are waiting and withdraw them until they expire. Accepting one with a name that can be used makes a new active member,
 //     invited by who sent it, who joins then.
 //   - Only an admin changes a role, and nobody their own. So there is always an admin.
 //   - Every active person sees the members' names and roles. Only admins see their addresses.
@@ -698,7 +697,7 @@ func (m *machine) RuleWithdraw(tc hegel.TestCase) {
 	err := m.d.WithdrawInvitation(id, invID)
 
 	expected := authorized(p, model.RoleAdmin, model.RoleModerator)
-	if expected == nil && (inv == nil || inv.gone) {
+	if expected == nil && (inv == nil || inv.gone || !m.now.Before(inv.expires)) {
 		expected = model.ErrorInvitationNotFound
 	}
 	tc.Event(fmt.Sprint("withdraw: ", expected))
@@ -808,8 +807,6 @@ func (m *machine) RuleChangeRole(tc hegel.TestCase) {
 
 	var expected error
 	switch {
-	case role == "owner":
-		expected = model.ErrorRoleInvalid
 	case p == nil:
 		expected = model.ErrorUserNotFound
 	case !p.active:
@@ -818,6 +815,8 @@ func (m *machine) RuleChangeRole(tc hegel.TestCase) {
 		expected = model.ErrorNotAllowed
 	case !target.active:
 		expected = model.ErrorMemberNotFound
+	case role == "owner":
+		expected = model.ErrorRoleInvalid
 	}
 	tc.Event(fmt.Sprint("change role: ", expected))
 	expectError(tc, "changing the role", expected, err)
