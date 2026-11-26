@@ -37,6 +37,7 @@ const recorded = extract((state) => {
   const r = page.recorder(state.window);
   return {
     wrong: [...r.wrong, ...page.overdue(r, 10_000)],
+    twice: r.twice,
     failed: [...r.failed, ...page.failedResources(state.window)],
     failing: r.failing,
     violations: r.violations,
@@ -49,15 +50,20 @@ const recorded = extract((state) => {
 //     top, shown as text, and an empty field.
 //   - After a comment: one new comment with that text, by the person, shown as text, last in its post's
 //     list, a count one higher, as many comments shown as the count says, and an empty field.
-//   - After opening a post's comments: no new-comment mark on the post, as many comments shown as the
-//     count says, and as many of them marked new as the count said were.
+//   - After opening a post's comments: no new-comment mark on the post, no word that they are loading,
+//     as many comments shown as the count says, and as many of them marked new as the count said were.
 //   - After text that is refused: the message that says why, no new post at the top or a comment count
 //     that has not changed, and the text still in its field.
-//   - After "Earlier posts": more posts, or no button for more.
+//   - After "Earlier posts": more posts, or no button for more and a line that says nothing was posted
+//     before.
 // Comparisons with what the page showed before are left out when another request from the same form
 // or post was on its way, and on a page the browser restored from its back/forward cache. Every request
 // is answered within ten seconds.
 export const answersShowWhatWasDone = always(() => recorded.current.wrong.length === 0);
+
+// A form, or a post's comments, sends one request at a time: its button stays off, and opening the
+// comments again sends nothing, until its own request has been answered.
+export const oneRequestAtATime = always(() => recorded.current.twice.length === 0);
 
 // No request from the page fails: Datastar reports no error, and nothing is answered with an HTTP error.
 export const noFailedRequests = always(() => recorded.current.failed.length === 0);
@@ -167,6 +173,63 @@ const summaries = extract((state) =>
   }),
 );
 
+const closedThreads = extract((state) =>
+  Array.from(state.document.querySelectorAll<HTMLDetailsElement>("details[id$='-thread']:not([open])")).flatMap((details) =>
+    isVisible(state.window, details) ? [details.id.replace(/^post-/, "").replace(/-thread$/, "")] : [],
+  ),
+);
+
+// fetched resolves when Datastar reports the given type of event for a request from the given element,
+// or after a second.
+function fetched(document: Document, window: Window, element: Element, type: string): Promise<void> {
+  return new Promise((resolve) => {
+    const listener = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { type: string; el: Element | null };
+      if (detail.el !== element || detail.type !== type) return;
+      document.removeEventListener("datastar-fetch", listener);
+      resolve();
+    };
+    document.addEventListener("datastar-fetch", listener);
+    window.setTimeout(() => {
+      document.removeEventListener("datastar-fetch", listener);
+      resolve();
+    }, 1000);
+  });
+}
+
+// Opens a post's comments, and closes and opens them again while the first opening is on its way, as
+// someone who clicks twice does. Opening them again sends nothing until the first answer has come.
+const reopenComments = registerCustomAction("reopenComments", async (document, window, postID: string) => {
+  const details = document.getElementById("post-" + postID + "-thread");
+  if (!(details instanceof HTMLDetailsElement) || details.open) return;
+  const started = fetched(document, window, details, "started");
+  details.open = true;
+  await started;
+  details.open = false;
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  details.open = true;
+});
+
+// Comments on a post whose comments are open, and while the comment is on its way, closes and opens the
+// comments again and presses Comment once their answer has come. The button stays off until the
+// comment's own answer has come, so the second press sends nothing.
+const commentWhileReopening = registerCustomAction("commentWhileReopening", async (document, window, postID: string) => {
+  const details = document.getElementById("post-" + postID + "-thread");
+  const form = document.getElementById("post-" + postID + "-comment-form");
+  const field = form?.querySelector("textarea");
+  const button = form?.querySelector<HTMLButtonElement>("button[type=submit]");
+  if (!(details instanceof HTMLDetailsElement) || !details.open || !form || !field || !button || button.disabled) return;
+  field.value = "While reopening " + Date.now();
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+  button.click();
+  details.open = false;
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  const opened = fetched(document, window, details, "finished");
+  details.open = true;
+  await opened;
+  if (!button.disabled) button.click();
+});
+
 const earlierOffered = extract((state) => {
   const button = state.document.querySelector<HTMLButtonElement>("#earlier button[type=submit]");
   return button !== null && !button.disabled;
@@ -203,6 +266,10 @@ export const exploring = weighted([
   [30, actions(() => (composerReady.current ? texts(tag(), page.postMaxLength).map(([text, length]) => writePost(text, length)) : []))],
   // Comments on a post whose comments are open, with one of the shapes of text.
   [30, actions(() => openThreads.current.flatMap((postID) => texts(tag(), page.commentMaxLength).map(([text, length]) => writeComment(postID, text, length))))],
+  // Opens a post's comments twice in quick succession.
+  [10, actions(() => closedThreads.current.map((postID) => reopenComments(postID)))],
+  // Comments while the post's comments are opened again.
+  [10, actions(() => openThreads.current.map((postID) => commentWhileReopening(postID)))],
   // Loads earlier posts. The button is at the end of the timeline, further down than scrolling often gets.
   [10, actions(() => (earlierOffered.current ? [loadEarlier()] : []))],
   // Signs out, by the route the app has for it, which no page links to yet.

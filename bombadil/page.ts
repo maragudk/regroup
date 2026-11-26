@@ -1,10 +1,10 @@
 // What bombadil's checks of the group page read from it, and what they keep in the browser between
 // states. Everything here runs in the page.
 //
-// The page has stable markers for most of what is read here (see step 3 of
-// docs/diary/2026-11-26-first-group-page.md). Three things have none yet, and are found by the
-// page's structure, in this file only: the name of the person signed in, the name of a post's author,
-// and the name of a comment's author.
+// The page has stable markers for what is read here (see steps 3 and 7 of
+// docs/diary/2026-11-26-first-group-page.md), among them data-person on the name of the person signed
+// in and data-author on the name of the author of a post or a comment. The one thing still found by
+// the page's structure is the label of a post's count of comments.
 
 // ---- What is on the page ----
 
@@ -43,19 +43,25 @@ export function groupName(document: Document): string | null {
 // personName of whoever the group page is for, which the sign shows beside "Switch person".
 export function personName(document: Document): string | null {
   if (!isGroupPage(document)) return null;
-  return document.querySelector("header .ml-auto > span:first-child")?.textContent ?? null;
+  return document.querySelector("[data-person]")?.textContent ?? null;
 }
 
-function bodyOf(element: Element | null): { body: string; markup: boolean } {
-  const body = element?.querySelector("[data-body]");
+// own of the given post or comment: the first of its elements that match the given selector and are
+// not part of a comment inside it.
+function own(element: Element, selector: string): Element | null {
+  return Array.from(element.querySelectorAll(selector)).find((e) => e.closest("[data-comment]") === (element.matches("[data-comment]") ? element : null)) ?? null;
+}
+
+function bodyOf(element: Element): { body: string; markup: boolean } {
+  const body = own(element, "[data-body]");
   return { body: body?.textContent ?? "", markup: (body?.childElementCount ?? 0) > 0 };
 }
 
 export function posts(document: Document): PagePost[] {
   return Array.from(document.querySelectorAll("#timeline article[data-post]")).map((article) => ({
     id: article.getAttribute("data-post") ?? "",
-    author: article.querySelector("h3")?.textContent ?? "",
-    ...bodyOf(article.querySelector(":scope > div:last-child")),
+    author: own(article, "[data-author]")?.textContent ?? "",
+    ...bodyOf(article),
     marked: Array.from(article.querySelectorAll('[data-mark="new"]')).some((mark) => mark.closest("details") === null),
     datetime: article.querySelector("time")?.getAttribute("datetime") ?? "",
   }));
@@ -66,7 +72,7 @@ export function comments(document: Document, postID: string): PageComment[] {
   if (!list) return [];
   return Array.from(list.querySelectorAll("li[data-comment]")).map((item) => ({
     id: item.getAttribute("data-comment") ?? "",
-    author: item.querySelector(":scope > p:first-child > span:first-child")?.textContent ?? "",
+    author: own(item, "[data-author]")?.textContent ?? "",
     ...bodyOf(item),
     marked: item.querySelector('[data-mark="new"]') !== null,
   }));
@@ -165,6 +171,8 @@ export type Recorder = {
   pending: Pending[];
   // Each answer whose page did not show what it should, with why.
   wrong: string[];
+  // Each request that started while another from the same form or post's comments was on its way.
+  twice: string[];
   // Each request that failed, as Datastar tells the page.
   failed: string[];
   // Each content security policy violation.
@@ -187,7 +195,7 @@ export function recorder(window: Window): Recorder {
   if (window.regroupBombadil) return window.regroupBombadil;
 
   const document = window.document;
-  const r: Recorder = { pending: [], wrong: [], failed: [], violations: [], failing: false, restored: false };
+  const r: Recorder = { pending: [], wrong: [], twice: [], failed: [], violations: [], failing: false, restored: false };
   window.regroupBombadil = r;
 
   // The resource timings that the checks read stop at 250 by default.
@@ -245,6 +253,8 @@ export function recorder(window: Window): Recorder {
         expect("earlier posts", form.id, () => {
           const after = posts(document).length;
           const more = document.querySelector("#earlier button") !== null;
+          const ended = document.getElementById("earlier")?.textContent?.trim() === "Nothing was posted before this.";
+          if (!more && !ended) return ["the timeline offers no earlier posts, and does not say that nothing was posted before"];
           return after > before || !more ? [] : ["the timeline still has " + after + " posts, and still offers earlier ones"];
         });
       }
@@ -260,6 +270,9 @@ export function recorder(window: Window): Recorder {
       const thread = /^post-(.+)-thread$/.exec(details.id);
       if (!thread) return;
       const postID = thread[1]!;
+      // An opening already on its way is the only one: opening the comments again meanwhile sends
+      // nothing. If it does send something, the recorder sees a second request start.
+      if (r.pending.some((p) => p.element === details.id)) return;
       const fresh = summary(document, postID).fresh;
       // The count of new comments is compared only if nothing else could have changed it: no other
       // opening or comment on the way, and a page that was not restored, whose count may be out of date.
@@ -287,6 +300,7 @@ export function recorder(window: Window): Recorder {
     switch (detail.type) {
       case "started": {
         r.failing = false;
+        if (r.pending.some((p) => p.element === element && p.started)) r.twice.push(element + " sent a request while one of its own was on its way");
         const p = r.pending.find((p) => p.element === element && !p.started);
         if (p) p.started = true;
         break;
@@ -431,6 +445,7 @@ function checkOpen(document: Document, postID: string, fresh: number | null): st
   const { count, fresh: still } = summary(document, postID);
   const shown = comments(document, postID);
   if (still !== 0) problems.push("the count still says " + still + " new");
+  if (document.querySelector("#post-" + CSS.escape(postID) + "-comments[data-loading]")) problems.push("the comments still say they are loading");
   if (count !== shown.length) problems.push("the count says " + count + ", but " + shown.length + " comments are shown");
   const marked = shown.filter((c) => c.marked).length;
   if (fresh !== null && marked !== fresh) problems.push("the count said " + fresh + " new, but " + marked + " comments are marked new");
