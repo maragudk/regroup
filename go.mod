@@ -4,6 +4,7 @@ go 1.27
 
 require (
 	github.com/alexedwards/scs/v2 v2.9.0
+	github.com/go-chi/chi/v5 v5.3.1
 	github.com/mattn/go-sqlite3 v1.14.49
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
@@ -47,7 +48,6 @@ require (
 	github.com/ebitengine/purego v0.12.0-alpha.1.0.20261015130536-d456b1bb95e8 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/go-chi/chi/v5 v5.3.1 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
