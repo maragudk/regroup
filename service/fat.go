@@ -41,7 +41,7 @@ type Fat struct {
 	getMembers         func(ctx context.Context, actor model.UserID) (int, error)
 	getTimeline        func(ctx context.Context, actor model.UserID, cursor string, limit int) (model.Timeline, error)
 	getUser            func(ctx context.Context, id model.UserID) (model.User, error)
-	invite             func(ctx context.Context, actor model.UserID, address string) (model.Invitation, error)
+	invite             func(ctx context.Context, actor model.UserID, token, address string) (model.Invitation, error)
 	listMembers        func(ctx context.Context, actor model.UserID) ([]model.Member, error)
 	requestSignInLink  func(ctx context.Context, address string) error
 	sendInvitation     func(ctx context.Context, id model.InvitationID) error

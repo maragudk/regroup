@@ -73,7 +73,7 @@ func (p *people) link(t *testing.T, address string) string {
 func (p *people) invite(t *testing.T, actor model.User, address string) (model.Invitation, string) {
 	t.Helper()
 
-	inv, err := p.fat.Invite(t.Context(), actor.ID, address)
+	inv, err := p.fat.Invite(t.Context(), actor.ID, token(t), address)
 	is.NotError(t, err)
 	sent := p.runJobs(t)
 	is.Equal(t, 1, len(sent), "expected one email")
@@ -316,7 +316,7 @@ func TestFat_Invite(t *testing.T) {
 		p := newPeople(t, "", nil)
 		signe := p.person(t, "Signe", model.RoleModerator)
 
-		inv, err := p.fat.Invite(t.Context(), signe.ID, " Amira@Example.com ")
+		inv, err := p.fat.Invite(t.Context(), signe.ID, token(t), " Amira@Example.com ")
 		is.NotError(t, err)
 		is.Equal(t, model.EmailAddress("amira@example.com"), inv.Email)
 		is.Equal(t, signe.ID, inv.InvitedBy)
@@ -355,13 +355,13 @@ func TestFat_Invite(t *testing.T) {
 		inactive := p.person(t, "Karen", model.RoleModerator)
 		sqlitetest.DeactivateUser(t, p.db, inactive.ID)
 
-		_, err := p.fat.Invite(t.Context(), markus.ID, "a@example.com")
+		_, err := p.fat.Invite(t.Context(), markus.ID, token(t), "a@example.com")
 		is.NotError(t, err)
-		_, err = p.fat.Invite(t.Context(), member.ID, "b@example.com")
+		_, err = p.fat.Invite(t.Context(), member.ID, token(t), "b@example.com")
 		is.Error(t, model.ErrorNotAllowed, err)
-		_, err = p.fat.Invite(t.Context(), inactive.ID, "b@example.com")
+		_, err = p.fat.Invite(t.Context(), inactive.ID, token(t), "b@example.com")
 		is.Error(t, model.ErrorUserInactive, err)
-		_, err = p.fat.Invite(t.Context(), "u_nope", "b@example.com")
+		_, err = p.fat.Invite(t.Context(), "u_nope", token(t), "b@example.com")
 		is.Error(t, model.ErrorUserNotFound, err)
 		is.Equal(t, 1, len(p.runJobs(t)))
 	})
@@ -372,11 +372,11 @@ func TestFat_Invite(t *testing.T) {
 		karen := p.person(t, "Karen", model.RoleMember)
 		sqlitetest.DeactivateUser(t, p.db, karen.ID)
 
-		_, err := p.fat.Invite(t.Context(), signe.ID, "not an address")
+		_, err := p.fat.Invite(t.Context(), signe.ID, token(t), "not an address")
 		is.Error(t, model.ErrorEmailInvalid, err)
-		_, err = p.fat.Invite(t.Context(), signe.ID, "SIGNE@example.com")
+		_, err = p.fat.Invite(t.Context(), signe.ID, token(t), "SIGNE@example.com")
 		is.Error(t, model.ErrorAlreadyMember, err)
-		_, err = p.fat.Invite(t.Context(), signe.ID, "karen@example.com")
+		_, err = p.fat.Invite(t.Context(), signe.ID, token(t), "karen@example.com")
 		is.Error(t, model.ErrorFormerMember, err)
 		is.Equal(t, 0, len(p.runJobs(t)))
 	})
@@ -403,17 +403,52 @@ func TestFat_Invite(t *testing.T) {
 	t.Run("sends nothing for an invitation withdrawn or replaced before its email went", func(t *testing.T) {
 		p := newPeople(t, "", nil)
 		signe := p.person(t, "Signe", model.RoleModerator)
-		a, err := p.fat.Invite(t.Context(), signe.ID, "a@example.com")
+		a, err := p.fat.Invite(t.Context(), signe.ID, token(t), "a@example.com")
 		is.NotError(t, err)
 		is.NotError(t, p.fat.WithdrawInvitation(t.Context(), signe.ID, a.ID))
-		_, err = p.fat.Invite(t.Context(), signe.ID, "b@example.com")
+		_, err = p.fat.Invite(t.Context(), signe.ID, token(t), "b@example.com")
 		is.NotError(t, err)
-		_, err = p.fat.Invite(t.Context(), signe.ID, "b@example.com")
+		_, err = p.fat.Invite(t.Context(), signe.ID, token(t), "b@example.com")
 		is.NotError(t, err)
 
 		sent := p.runJobs(t)
 		is.Equal(t, 1, len(sent))
 		is.Equal(t, model.EmailAddress("b@example.com"), sent[0].To)
+	})
+
+	t.Run("invites once for a form sent again with the same address in any spelling, and says when it was sent again with another", func(t *testing.T) {
+		p := newPeople(t, "", nil)
+		signe := p.person(t, "Signe", model.RoleModerator)
+		form := token(t)
+
+		first, err := p.fat.Invite(t.Context(), signe.ID, form, "amira@example.com")
+		is.NotError(t, err)
+		again, err := p.fat.Invite(t.Context(), signe.ID, form, " Amira@Example.com")
+		is.NotError(t, err)
+		is.Equal(t, first.ID, again.ID)
+		_, err = p.fat.Invite(t.Context(), signe.ID, form, "nadia@example.com")
+		is.Error(t, model.ErrorFormResentChanged, err)
+
+		sent := p.runJobs(t)
+		is.Equal(t, 1, len(sent))
+		is.Equal(t, model.EmailAddress("amira@example.com"), sent[0].To)
+		invs, err := p.fat.GetInvitations(t.Context(), signe.ID)
+		is.NotError(t, err)
+		is.Equal(t, 1, len(invs))
+	})
+
+	t.Run("refuses a form token that is not one, after checking who may invite", func(t *testing.T) {
+		p := newPeople(t, "", nil)
+		signe := p.person(t, "Signe", model.RoleModerator)
+		member := p.person(t, "Thomas", model.RoleMember)
+
+		for _, form := range []string{"", "garbage", token(t) + "x"} {
+			_, err := p.fat.Invite(t.Context(), signe.ID, form, "amira@example.com")
+			is.Error(t, model.ErrorFormTokenInvalid, err)
+		}
+		_, err := p.fat.Invite(t.Context(), member.ID, "", "amira@example.com")
+		is.Error(t, model.ErrorNotAllowed, err)
+		is.Equal(t, 0, len(p.runJobs(t)))
 	})
 }
 
@@ -723,7 +758,7 @@ func TestFat_people_telemetry(t *testing.T) {
 		is.NotError(t, err)
 		_, err = p.fat.SignIn(t.Context(), amiraToken, "")
 		is.Error(t, model.ErrorLinkInvalid, err)
-		_, err = p.fat.Invite(t.Context(), amira.ID, "markus@example.com")
+		_, err = p.fat.Invite(t.Context(), amira.ID, token(t), "markus@example.com")
 		is.Error(t, model.ErrorAlreadyMember, err)
 		other, _ := p.invite(t, amira, "jonas@example.com")
 		is.NotError(t, p.fat.WithdrawInvitation(t.Context(), amira.ID, other.ID))
@@ -873,7 +908,7 @@ func (d *peopleDriver) SignIn(token, name string) (model.UserID, error) {
 }
 
 func (d *peopleDriver) Invite(actor model.UserID, address string) (model.InvitationID, error) {
-	inv, err := d.fat.Invite(d.t.Context(), actor, address)
+	inv, err := d.fat.Invite(d.t.Context(), actor, d.formToken(), address)
 	return inv.ID, d.answer(err)
 }
 
@@ -906,6 +941,12 @@ func (d *peopleDriver) ListMembers(actor model.UserID) ([]model.Member, error) {
 }
 
 func (d *peopleDriver) Post(actor model.UserID) (model.PostID, error) {
+	p, err := d.fat.CreatePost(d.t.Context(), actor, d.formToken(), "Note")
+	return p.ID, d.answer(err)
+}
+
+// formToken that no form of the history has had before.
+func (d *peopleDriver) formToken() string {
 	d.forms++
 	var b [16]byte
 	for i := range 8 {
@@ -915,8 +956,7 @@ func (d *peopleDriver) Post(actor model.UserID) (model.PostID, error) {
 	if err != nil {
 		d.t.Fatal(err)
 	}
-	p, err := d.fat.CreatePost(d.t.Context(), actor, form.String(), "Note")
-	return p.ID, d.answer(err)
+	return form.String()
 }
 
 func (d *peopleDriver) Look(actor model.UserID) ([]peopletest.Post, error) {

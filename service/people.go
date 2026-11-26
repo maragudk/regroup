@@ -292,7 +292,7 @@ func (f *Fat) SignIn(ctx context.Context, token, name string) (model.User, error
 // [model.JobNameSendInvitation] that sends it.
 type inviter interface {
 	userGetter
-	CreateInvitation(ctx context.Context, inv model.Invitation) (model.Invitation, error)
+	CreateInvitation(ctx context.Context, inv model.Invitation, token model.FormToken) (model.Invitation, error)
 }
 
 // Invite wires [Fat.Invite] to the given store and clock.
@@ -303,8 +303,13 @@ func Invite(f *Fat, db inviter, now func() time.Time) {
 		panic("service: Invite already wired")
 	}
 
-	f.invite = func(ctx context.Context, actor model.UserID, address string) (model.Invitation, error) {
+	f.invite = func(ctx context.Context, actor model.UserID, token, address string) (model.Invitation, error) {
 		if _, err := authorize(ctx, db, actor, model.ActionInvite); err != nil {
+			return model.Invitation{}, err
+		}
+
+		formToken, err := model.ParseFormToken(token)
+		if err != nil {
 			return model.Invitation{}, err
 		}
 
@@ -319,7 +324,7 @@ func Invite(f *Fat, db inviter, now func() time.Time) {
 			Expires:   model.Time{T: t.Add(model.InvitationLifetime)},
 			Email:     e,
 			InvitedBy: actor,
-		})
+		}, formToken)
 		if err != nil {
 			return model.Invitation{}, err
 		}
@@ -340,8 +345,14 @@ func Invite(f *Fat, db inviter, now func() time.Time) {
 // [model.ErrorFormerMember]. An actor who may not invite is [model.ErrorNotAllowed],
 // [model.ErrorUserInactive], or [model.ErrorUserNotFound].
 //
+// It is sent from the form with the given token, which is what [model.NewFormToken] made, or
+// [model.ErrorFormTokenInvalid]. If the actor has made an invitation from a form with the same token
+// before, Invite makes nothing and sends nothing: it returns the invitation that is waiting for the
+// address now, or none if none is, if the address is the one invited then, and
+// [model.ErrorFormResentChanged] if it is not.
+//
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
-func (f *Fat) Invite(ctx context.Context, actor model.UserID, address string) (model.Invitation, error) {
+func (f *Fat) Invite(ctx context.Context, actor model.UserID, token, address string) (model.Invitation, error) {
 	if f.invite == nil {
 		panic("service: Invite not wired; call service.Invite or service.Setup")
 	}
@@ -349,7 +360,7 @@ func (f *Fat) Invite(ctx context.Context, actor model.UserID, address string) (m
 	ctx, span := f.tracer.Start(ctx, "service.Invite")
 	defer span.End()
 
-	inv, err := f.invite(ctx, actor, address)
+	inv, err := f.invite(ctx, actor, token, address)
 	recordError(span, err)
 	return inv, err
 }

@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"time"
@@ -199,13 +201,33 @@ func insertUser(ctx context.Context, tx *sql.Tx, into *model.User, u model.User)
 // address, if there is one, which then no longer works. Invitations that have expired by its time are
 // deleted.
 //
+// It is sent from the form with the given token. If the person it names has made an invitation from a
+// form with the same token before, CreateInvitation makes nothing: it returns the invitation that is
+// waiting for the address now, or none if none is, if the address is the one invited then, and
+// [model.ErrorFormResentChanged] if it is not.
+//
 // Returns [model.ErrorAlreadyMember] if the address is an active person's, and [model.ErrorFormerMember]
 // if it is the address of a person who is no longer active.
-func (d *Database) CreateInvitation(ctx context.Context, inv model.Invitation) (model.Invitation, error) {
+func (d *Database) CreateInvitation(ctx context.Context, inv model.Invitation, token model.FormToken) (model.Invitation, error) {
 	var created model.Invitation
 	err := d.H.InTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		var sentHash string
+		err := tx.Get(ctx, &sentHash, `select email_hash from invitation_form_tokens where invited_by = ? and form_token = ?`, inv.InvitedBy, token)
+		switch {
+		case err == nil && sentHash != emailHash(inv.Email):
+			return model.ErrorFormResentChanged
+		case err == nil:
+			query := `select ` + invitationColumns + ` from invitations i join users u on u.id = i.invited_by where i.email = ? and i.expires > ?`
+			if err := tx.Get(ctx, &created, query, inv.Email, inv.Created); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			return nil
+		case !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
+
 		var u model.User
-		err := userByEmail(ctx, tx, &u, inv.Email)
+		err = userByEmail(ctx, tx, &u, inv.Email)
 		switch {
 		case err == nil && u.Active:
 			return model.ErrorAlreadyMember
@@ -219,8 +241,13 @@ func (d *Database) CreateInvitation(ctx context.Context, inv model.Invitation) (
 			return err
 		}
 
+		query := `insert into invitation_form_tokens (invited_by, form_token, email_hash, created) values (?, ?, ?, ?)`
+		if err := tx.Exec(ctx, query, inv.InvitedBy, token, emailHash(inv.Email), inv.Created); err != nil {
+			return err
+		}
+
 		var id model.InvitationID
-		query := `insert into invitations (created, expires, email, invited_by) values (?, ?, ?, ?) returning id`
+		query = `insert into invitations (created, expires, email, invited_by) values (?, ?, ?, ?) returning id`
 		if err := tx.Get(ctx, &id, query, inv.Created, inv.Expires, inv.Email, inv.InvitedBy); err != nil {
 			return err
 		}
@@ -239,6 +266,12 @@ func (d *Database) CreateInvitation(ctx context.Context, inv model.Invitation) (
 		return model.Invitation{}, err
 	}
 	return created, nil
+}
+
+// emailHash of the given address, which must be parsed already: SHA-256, in lowercase hexadecimal.
+func emailHash(e model.EmailAddress) string {
+	h := sha256.Sum256([]byte(e))
+	return hex.EncodeToString(h[:])
 }
 
 // invitationColumns of an invitation, with the name of the person who sent it.

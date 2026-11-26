@@ -1,6 +1,9 @@
 package sqlite_test
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"testing"
 	"time"
@@ -204,7 +207,7 @@ func TestDatabase_CreateInvitation(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreatePerson(t, db, "Signe", "signe@example.com", model.RoleModerator)
 
-		inv, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "amira@example.com", InvitedBy: signe.ID})
+		inv, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "amira@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.NotError(t, err)
 		is.Equal(t, model.EmailAddress("amira@example.com"), inv.Email)
 		is.Equal(t, signe.ID, inv.InvitedBy)
@@ -220,12 +223,12 @@ func TestDatabase_CreateInvitation(t *testing.T) {
 	t.Run("replaces the invitation that was waiting for the same address, whose link then no longer works", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreatePerson(t, db, "Signe", "signe@example.com", model.RoleModerator)
-		first, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "amira@example.com", InvitedBy: signe.ID})
+		first, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "amira@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.NotError(t, err)
 		_, err = db.SetInvitationHash(t.Context(), first.ID, "first", at(1))
 		is.NotError(t, err)
 
-		second, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(2), Expires: at(62), Email: "amira@example.com", InvitedBy: signe.ID})
+		second, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(2), Expires: at(62), Email: "amira@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.NotError(t, err)
 		is.True(t, first.ID != second.ID)
 
@@ -242,24 +245,101 @@ func TestDatabase_CreateInvitation(t *testing.T) {
 		thomas := sqlitetest.CreatePerson(t, db, "Thomas", "thomas@example.com", model.RoleMember)
 		sqlitetest.DeactivateUser(t, db, thomas.ID)
 
-		_, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "signe@example.com", InvitedBy: signe.ID})
+		_, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "signe@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.Error(t, model.ErrorAlreadyMember, err)
-		_, err = db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "thomas@example.com", InvitedBy: signe.ID})
+		_, err = db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "thomas@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.Error(t, model.ErrorFormerMember, err)
 		is.Equal(t, 0, count(t, db, "invitations"))
 		is.Equal(t, 0, len(jobstest.Take(t, db)))
 	})
+
+	t.Run("makes nothing for a form sent again with the same address, and returns the invitation that is waiting for it", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreatePerson(t, db, "Signe", "signe@example.com", model.RoleModerator)
+		token := formToken(t)
+
+		first, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "amira@example.com", InvitedBy: signe.ID}, token)
+		is.NotError(t, err)
+		is.Equal(t, 1, len(jobstest.Take(t, db)))
+
+		again, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(1), Expires: at(61), Email: "amira@example.com", InvitedBy: signe.ID}, token)
+		is.NotError(t, err)
+		is.Equal(t, first.ID, again.ID)
+		is.Equal(t, at(60).String(), again.Expires.String())
+		is.Equal(t, 1, count(t, db, "invitations"))
+		is.Equal(t, 0, len(jobstest.Take(t, db)))
+
+		// Once the invitation is gone, the same form still makes nothing.
+		is.NotError(t, db.DeleteInvitation(t.Context(), first.ID, at(2)))
+		again, err = db.CreateInvitation(t.Context(), model.Invitation{Created: at(3), Expires: at(63), Email: "amira@example.com", InvitedBy: signe.ID}, token)
+		is.NotError(t, err)
+		is.Equal(t, model.InvitationID(""), again.ID)
+		is.Equal(t, 0, count(t, db, "invitations"))
+		is.Equal(t, 0, len(jobstest.Take(t, db)))
+	})
+
+	t.Run("makes nothing for a form sent again with another address, and says so", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreatePerson(t, db, "Signe", "signe@example.com", model.RoleModerator)
+		token := formToken(t)
+
+		_, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "amira@example.com", InvitedBy: signe.ID}, token)
+		is.NotError(t, err)
+		jobstest.Take(t, db)
+
+		_, err = db.CreateInvitation(t.Context(), model.Invitation{Created: at(1), Expires: at(61), Email: "nadia@example.com", InvitedBy: signe.ID}, token)
+		is.Error(t, model.ErrorFormResentChanged, err)
+		is.Equal(t, 1, count(t, db, "invitations"))
+		is.Equal(t, 0, len(jobstest.Take(t, db)))
+	})
+
+	t.Run("lets another person use a token someone else used, and keeps a token that made nothing unused", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreatePerson(t, db, "Signe", "signe@example.com", model.RoleModerator)
+		markus := sqlitetest.CreatePerson(t, db, "Markus", "markus@example.com", model.RoleAdmin)
+		token := formToken(t)
+
+		_, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "signe@example.com", InvitedBy: signe.ID}, token)
+		is.Error(t, model.ErrorAlreadyMember, err)
+		_, err = db.CreateInvitation(t.Context(), model.Invitation{Created: at(1), Expires: at(61), Email: "amira@example.com", InvitedBy: signe.ID}, token)
+		is.NotError(t, err)
+		_, err = db.CreateInvitation(t.Context(), model.Invitation{Created: at(2), Expires: at(62), Email: "nadia@example.com", InvitedBy: markus.ID}, token)
+		is.NotError(t, err)
+		is.Equal(t, 2, count(t, db, "invitations"))
+	})
+
+	t.Run("keeps only the hash of the address with the token, which outlives the invitation", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreatePerson(t, db, "Signe", "signe@example.com", model.RoleModerator)
+
+		_, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "amira@example.com", InvitedBy: signe.ID}, formToken(t))
+		is.NotError(t, err)
+
+		var hashes []string
+		is.NotError(t, db.H.Select(t.Context(), &hashes, `select email_hash from invitation_form_tokens`))
+		sum := sha256.Sum256([]byte("amira@example.com"))
+		is.EqualSlice(t, []string{hex.EncodeToString(sum[:])}, hashes)
+	})
+}
+
+// formToken for a form, new each time.
+func formToken(t *testing.T) model.FormToken {
+	t.Helper()
+
+	token, err := model.NewFormToken(rand.Reader)
+	is.NotError(t, err)
+	return token
 }
 
 func TestDatabase_GetInvitations(t *testing.T) {
 	t.Run("lists the invitations that have not expired, the newest first, and deletes one", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreatePerson(t, db, "Signe", "signe@example.com", model.RoleModerator)
-		old, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(10), Email: "old@example.com", InvitedBy: signe.ID})
+		old, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(10), Email: "old@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.NotError(t, err)
-		a, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(1), Expires: at(61), Email: "a@example.com", InvitedBy: signe.ID})
+		a, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(1), Expires: at(61), Email: "a@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.NotError(t, err)
-		b, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(2), Expires: at(62), Email: "b@example.com", InvitedBy: signe.ID})
+		b, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(2), Expires: at(62), Email: "b@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.NotError(t, err)
 
 		invs, err := db.GetInvitations(t.Context(), at(10))
@@ -279,7 +359,7 @@ func TestDatabase_GetInvitations(t *testing.T) {
 		// An invitation that has expired is not waiting, so there is none to withdraw, and the next
 		// invitation deletes it.
 		is.Error(t, model.ErrorInvitationNotFound, db.DeleteInvitation(t.Context(), old.ID, at(10)))
-		_, err = db.CreateInvitation(t.Context(), model.Invitation{Created: at(10), Expires: at(70), Email: "c@example.com", InvitedBy: signe.ID})
+		_, err = db.CreateInvitation(t.Context(), model.Invitation{Created: at(10), Expires: at(70), Email: "c@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.NotError(t, err)
 		is.Equal(t, 0, count(t, db, "invitations where id = '"+old.ID.String()+"'"))
 	})
@@ -289,7 +369,7 @@ func TestDatabase_AcceptInvitation(t *testing.T) {
 	t.Run("has a new active member join with the invitation's address, the name, and who invited them, once", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreatePerson(t, db, "Signe", "signe@example.com", model.RoleModerator)
-		inv, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "amira@example.com", InvitedBy: signe.ID})
+		inv, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "amira@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.NotError(t, err)
 		_, err = db.SetInvitationHash(t.Context(), inv.ID, "h", at(1))
 		is.NotError(t, err)
@@ -317,7 +397,7 @@ func TestDatabase_AcceptInvitation(t *testing.T) {
 	t.Run("makes nothing posted before the person accepted new to them, and what is posted after new", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreatePerson(t, db, "Signe", "signe@example.com", model.RoleModerator)
-		inv, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "amira@example.com", InvitedBy: signe.ID})
+		inv, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "amira@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.NotError(t, err)
 		_, err = db.SetInvitationHash(t.Context(), inv.ID, "h", at(1))
 		is.NotError(t, err)
@@ -336,11 +416,11 @@ func TestDatabase_AcceptInvitation(t *testing.T) {
 	t.Run("refuses an invitation that has expired, been withdrawn, or was never made", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreatePerson(t, db, "Signe", "signe@example.com", model.RoleModerator)
-		a, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "a@example.com", InvitedBy: signe.ID})
+		a, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "a@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.NotError(t, err)
 		_, err = db.SetInvitationHash(t.Context(), a.ID, "a", at(1))
 		is.NotError(t, err)
-		b, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "b@example.com", InvitedBy: signe.ID})
+		b, err := db.CreateInvitation(t.Context(), model.Invitation{Created: at(0), Expires: at(60), Email: "b@example.com", InvitedBy: signe.ID}, formToken(t))
 		is.NotError(t, err)
 		_, err = db.SetInvitationHash(t.Context(), b.ID, "b", at(1))
 		is.NotError(t, err)

@@ -235,7 +235,7 @@ func TestPeople_invitation(t *testing.T) {
 	t.Run("opens a page that says the invitation works without using it up, and has the person join and sign in on accepting it, once", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreatePerson(t, a.db, "Signe", "signe@example.com", model.RoleModerator)
-		_, err := a.fat.Invite(t.Context(), signe.ID, "amira@example.com")
+		_, err := a.fat.Invite(t.Context(), signe.ID, newToken(t), "amira@example.com")
 		is.NotError(t, err)
 		tokens := a.runJobs(t)
 		is.Equal(t, 1, len(tokens))

@@ -57,7 +57,9 @@ func TestOutbox(t *testing.T) {
 		var markus model.User
 		is.NotError(t, db.H.Get(t.Context(), &markus, "select * from users where name = 'Markus'"))
 		is.NotError(t, fat.RequestSignInLink(t.Context(), "signe@example.com"))
-		_, err = fat.Invite(t.Context(), markus.ID, "nadia@example.com")
+		form, err := model.NewFormToken(rand.Reader)
+		is.NotError(t, err)
+		_, err = fat.Invite(t.Context(), markus.ID, form.String(), "nadia@example.com")
 		is.NotError(t, err)
 		jobstest.Run(t, db, jobs.Funcs(jobs.RegisterOpts{Emails: fat}))
 
