@@ -11,6 +11,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"go.opentelemetry.io/otel"
 	"maragu.dev/env"
 	"maragu.dev/errors"
 	"maragu.dev/glue/app"
@@ -49,6 +50,9 @@ var setupPreview func(ctx context.Context, log *slog.Logger, db *sqlite.Database
 var previewLink func(signedIn bool) gomponents.Node
 
 func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
+	// Before anything gets a tracer, so that no span records the values of a URL's query.
+	otel.SetTracerProvider(http.HideQueryValues(otel.GetTracerProvider()))
+
 	databaseLog := log.With("component", "sql.Database")
 
 	jobTimeout := env.GetDurationOrDefault("JOB_QUEUE_TIMEOUT", 10*time.Second)
@@ -116,7 +120,7 @@ func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
 		BaseURL:                   baseURL,
 		Emails:                    html.EmailTemplates(),
 		Key:                       env.GetStringOrDefault("POSTMARK_KEY", ""),
-		Log:                       slog.New(withoutRecipients(log.Handler())).With("component", "email.Sender"),
+		Log:                       slog.New(withoutAddresses(log.Handler())).With("component", "email.Sender"),
 		MarketingEmailAddress:     model.EmailAddress(env.GetStringOrDefault("MARKETING_EMAIL_ADDRESS", "marketing@example.com")),
 		MarketingEmailName:        env.GetStringOrDefault("MARKETING_EMAIL_NAME", "Marketing"),
 		ReplyToEmailAddress:       model.EmailAddress(env.GetStringOrDefault("REPLY_TO_EMAIL_ADDRESS", "support@example.com")),

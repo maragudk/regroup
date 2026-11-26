@@ -8,8 +8,6 @@ import (
 	"net/http"
 
 	"github.com/alexedwards/scs/v2"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	gluehttp "maragu.dev/glue/http"
 	. "maragu.dev/gomponents"
 
@@ -37,7 +35,7 @@ type peopleService interface {
 //     POST /invitation with the token and a name accepts it, signs in, and goes to the group page.
 func people(r *Router, log *slog.Logger, svc peopleService) {
 	r.Post("/sign-in", func(props html.PageProps) (Node, error) {
-		err := svc.RequestSignInLink(props.Ctx, props.R.FormValue("email"))
+		err := svc.RequestSignInLink(props.Ctx, props.R.PostFormValue("email"))
 		switch {
 		case errors.Is(err, model.ErrorEmailInvalid):
 			return plain(props.W, http.StatusBadRequest, "That is not an email address.")
@@ -63,7 +61,7 @@ func people(r *Router, log *slog.Logger, svc peopleService) {
 	})
 
 	r.Post("/sign-in/link", func(props html.PageProps) (Node, error) {
-		u, err := svc.SignIn(props.Ctx, props.R.FormValue("token"), props.R.FormValue("name"))
+		u, err := svc.SignIn(props.Ctx, props.R.PostFormValue("token"), props.R.PostFormValue("name"))
 		return signedIn(props, log, r.SM, u, err)
 	})
 
@@ -80,7 +78,7 @@ func people(r *Router, log *slog.Logger, svc peopleService) {
 	})
 
 	r.Post("/invitation", func(props html.PageProps) (Node, error) {
-		u, err := svc.AcceptInvitation(props.Ctx, props.R.FormValue("token"), props.R.FormValue("name"))
+		u, err := svc.AcceptInvitation(props.Ctx, props.R.PostFormValue("token"), props.R.PostFormValue("name"))
 		if errors.Is(err, model.ErrorLinkInvalid) {
 			return plain(props.W, http.StatusBadRequest, invitationRefusal)
 		}
@@ -136,21 +134,4 @@ func plain(w http.ResponseWriter, status int, text string) (Node, error) {
 	w.WriteHeader(status)
 	_, _ = io.WriteString(w, text)
 	return nil, nil
-}
-
-// hideTokens keeps the token of a link in an email out of the telemetry and out of the Referer header,
-// for a request whose query has one, such as the page a sign-in link opens. The server's span records
-// the query as it came, so it is recorded again with each token's value hidden, which replaces it, and
-// the answer tells the browser to send no Referer from the page.
-func hideTokens(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if q := r.URL.Query(); q.Has("token") {
-			w.Header().Set("Referrer-Policy", "no-referrer")
-			for i := range q["token"] {
-				q["token"][i] = "hidden"
-			}
-			trace.SpanFromContext(r.Context()).SetAttributes(attribute.String("url.query", q.Encode()))
-		}
-		next.ServeHTTP(w, r)
-	})
 }
