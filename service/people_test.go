@@ -18,6 +18,7 @@ import (
 	"app/jobs"
 	"app/jobstest"
 	"app/model"
+	"app/peopletest"
 	"app/service"
 	"app/servicetest"
 	"app/sqlite"
@@ -664,4 +665,148 @@ func count(t *testing.T, db *sqlite.Database, from string) int {
 	var n int
 	is.NotError(t, db.H.Get(t.Context(), &n, "select count(*) from "+from))
 	return n
+}
+
+func TestFat_peopleHistory(t *testing.T) {
+	t.Run("signs in, invites, and changes roles as the rules say, after any sequence of actions by several people", func(t *testing.T) {
+		peopletest.Test(t, &peopleDriver{db: sqlitetest.NewDatabase(t)}, 30)
+	})
+}
+
+// peopleDriver runs a history of people against the business logic on a real database, with its jobs.
+type peopleDriver struct {
+	t      testing.TB
+	db     *sqlite.Database
+	fat    *service.Fat
+	sender *servicetest.Sender
+	clock  *clock
+	forms  uint64
+}
+
+func (d *peopleDriver) Reset(t testing.TB, now time.Time, firstAdmin model.EmailAddress, seed [32]byte) {
+	d.t = t
+	for _, query := range []string{
+		"update users set invited_by = null", "delete from sign_in_links", "delete from invitations",
+		"delete from comments", "delete from posts", "delete from users", "delete from accounts",
+	} {
+		if err := d.db.H.Exec(t.Context(), query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobstest.Take(t, d.db)
+
+	d.clock = &clock{t: now}
+	d.sender = &servicetest.Sender{}
+	d.fat = service.NewFat(service.NewFatOptions{})
+	service.Setup(d.fat, nil, d.db, d.sender, d.clock.Now, rand.NewChaCha8(seed), model.Group{Name: "The Loft", TimeZone: time.UTC}, firstAdmin)
+}
+
+func (d *peopleDriver) SetClock(now time.Time) {
+	d.clock.t = now
+}
+
+func (d *peopleDriver) Deactivate(id model.UserID) {
+	sqlitetest.DeactivateUser(d.t, d.db, id)
+}
+
+func (d *peopleDriver) People() []peopletest.Person {
+	var users []model.User
+	if err := d.db.H.Select(d.t.Context(), &users, "select * from users order by rowid"); err != nil {
+		d.t.Fatal(err)
+	}
+	var people []peopletest.Person
+	for _, u := range users {
+		people = append(people, peopletest.Person{ID: u.ID, Name: u.Name, Email: u.Email, Role: u.Role, Active: u.Active, InvitedBy: u.InvitedBy})
+	}
+	return people
+}
+
+func (d *peopleDriver) Emails() []peopletest.Email {
+	jobstest.Run(d.t, d.db, jobs.Funcs(jobs.RegisterOpts{Emails: d.fat}))
+	var sent []peopletest.Email
+	for _, e := range d.sender.Take() {
+		sent = append(sent, peopletest.Email{To: e.To, Template: e.Template, Subject: e.Subject, Token: e.Keywords["token"]})
+	}
+	return sent
+}
+
+// answer is the given error if it is one from the business domain, and fails the test otherwise.
+func (d *peopleDriver) answer(err error) error {
+	var domainErr model.Error
+	if err != nil && !errors.As(err, &domainErr) {
+		d.t.Fatal(err)
+	}
+	return err
+}
+
+func (d *peopleDriver) RequestSignInLink(address string) error {
+	return d.answer(d.fat.RequestSignInLink(d.t.Context(), address))
+}
+
+func (d *peopleDriver) CheckSignInLink(token string) (bool, error) {
+	check, err := d.fat.CheckSignInLink(d.t.Context(), token)
+	return check.Joining, d.answer(err)
+}
+
+func (d *peopleDriver) SignIn(token, name string) (model.UserID, error) {
+	u, err := d.fat.SignIn(d.t.Context(), token, name)
+	return u.ID, d.answer(err)
+}
+
+func (d *peopleDriver) Invite(actor model.UserID, address string) (model.InvitationID, error) {
+	inv, err := d.fat.Invite(d.t.Context(), actor, address)
+	return inv.ID, d.answer(err)
+}
+
+func (d *peopleDriver) GetInvitations(actor model.UserID) ([]model.Invitation, error) {
+	invs, err := d.fat.GetInvitations(d.t.Context(), actor)
+	return invs, d.answer(err)
+}
+
+func (d *peopleDriver) WithdrawInvitation(actor model.UserID, id model.InvitationID) error {
+	return d.answer(d.fat.WithdrawInvitation(d.t.Context(), actor, id))
+}
+
+func (d *peopleDriver) CheckInvitation(token string) (string, error) {
+	check, err := d.fat.CheckInvitation(d.t.Context(), token)
+	return check.InvitedByName, d.answer(err)
+}
+
+func (d *peopleDriver) AcceptInvitation(token, name string) (model.UserID, error) {
+	u, err := d.fat.AcceptInvitation(d.t.Context(), token, name)
+	return u.ID, d.answer(err)
+}
+
+func (d *peopleDriver) ChangeRole(actor, target model.UserID, role string) error {
+	return d.answer(d.fat.ChangeRole(d.t.Context(), actor, target, role))
+}
+
+func (d *peopleDriver) ListMembers(actor model.UserID) ([]model.Member, error) {
+	members, err := d.fat.ListMembers(d.t.Context(), actor)
+	return members, d.answer(err)
+}
+
+func (d *peopleDriver) Post(actor model.UserID) (model.PostID, error) {
+	d.forms++
+	var b [16]byte
+	for i := range 8 {
+		b[i] = byte(d.forms >> (8 * i))
+	}
+	form, err := model.NewFormToken(bytes.NewReader(b[:]))
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	p, err := d.fat.CreatePost(d.t.Context(), actor, form.String(), "Note")
+	return p.ID, d.answer(err)
+}
+
+func (d *peopleDriver) Look(actor model.UserID) ([]peopletest.Post, error) {
+	timeline, err := d.fat.GetTimeline(d.t.Context(), actor, "", 100)
+	var posts []peopletest.Post
+	for _, day := range timeline.Days {
+		for _, p := range day.Posts {
+			posts = append(posts, peopletest.Post{ID: p.ID, New: p.New})
+		}
+	}
+	return posts, d.answer(err)
 }
