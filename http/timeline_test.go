@@ -39,6 +39,7 @@ import (
 	apphttp "app/http"
 	"app/model"
 	"app/service"
+	"app/servicetest"
 	"app/sqlite"
 	"app/sqlitetest"
 	"app/timelinetest"
@@ -2853,6 +2854,13 @@ type app struct {
 	handler http.Handler
 	clock   *clock
 	logs    *logs
+
+	// sender keeps the emails the app sends, and firstAdmin is the address of the first admin, if any.
+	sender     *servicetest.Sender
+	firstAdmin model.EmailAddress
+
+	// fat is the business logic behind the routes.
+	fat *service.Fat
 }
 
 // clock that a test sets, and that the app reads the time from.
@@ -2946,8 +2954,16 @@ func (s *store) GetComments(ctx context.Context, reader model.UserID, postID mod
 
 // config of an [app].
 type config struct {
-	zone  string
-	extra func(signedIn bool) Node
+	zone       string
+	extra      func(signedIn bool) Node
+	firstAdmin model.EmailAddress
+}
+
+// withFirstAdmin sets the address of the first admin.
+func withFirstAdmin(e model.EmailAddress) func(*config) {
+	return func(c *config) {
+		c.firstAdmin = e
+	}
 }
 
 // inZone sets the group's time zone.
@@ -2970,7 +2986,7 @@ func newApp(t *testing.T, opts ...func(*config)) *app {
 	is.NotError(t, err)
 	group := model.Group{Name: "The Loft", TimeZone: loc}
 
-	a := &app{db: sqlitetest.NewDatabase(t), sm: scs.New(), clock: &clock{t: base}, logs: &logs{}}
+	a := &app{db: sqlitetest.NewDatabase(t), sm: scs.New(), clock: &clock{t: base}, logs: &logs{}, sender: &servicetest.Sender{}, firstAdmin: c.firstAdmin}
 	a.store = &store{Database: a.db, fail: map[string]error{}}
 	a.route(group, c.extra, 0)
 	return a
@@ -2989,6 +3005,16 @@ func (a *app) route(group model.Group, extra func(signedIn bool) Node, pageSize 
 	service.GetComments(fat, a.store)
 	service.GetMembers(fat, a.store)
 	service.GetTimeline(fat, a.store, a.clock.Now, group)
+	random := rand.NewChaCha8([32]byte{1})
+	service.RequestSignInLink(fat, a.db)
+	service.SendSignInLink(fat, a.db, a.sender, a.clock.Now, random, group, a.firstAdmin)
+	service.CheckSignInLink(fat, a.db, a.clock.Now, a.firstAdmin)
+	service.SignIn(fat, a.db, a.clock.Now, a.firstAdmin)
+	service.Invite(fat, a.db, a.clock.Now)
+	service.SendInvitation(fat, a.db, a.sender, a.clock.Now, random, group)
+	service.CheckInvitation(fat, a.db, a.clock.Now)
+	service.AcceptInvitation(fat, a.db, a.clock.Now)
+	a.fat = fat
 
 	// The same middleware as [gluehttp.Server] puts in front of every page, in its order and nesting.
 	protection := http.NewCrossOriginProtection()
