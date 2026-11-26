@@ -86,7 +86,7 @@ Open decisions:
 - `docs/core-values.md`: the five values, with their concrete commitments.
 - `README.md`: the tagline.
 - There is no logo, no screenshot of a working group, no testimonial, and no usage figure. Do not invent any. No group uses regroup yet.
-- The fonts in `public/styles` and the indigo primary colour in `tailwind.css` come from the starter template. Nobody has chosen them for regroup.
+- The fonts are Fraunces and Source Sans 3, served by the app itself, and the primary colour is Tailwind's default orange. Markus chose them on 2026-11-26.
 
 ## Product Principles
 
