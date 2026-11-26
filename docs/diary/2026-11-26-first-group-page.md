@@ -551,3 +551,106 @@ False alarms. Requests that overlap, and pages the browser restores from its bac
 ### Future work
 
 Fix the two faults, add the markers, see the workflow run on GitHub, and decide when bombadil becomes a merge gate. The memory in `/AGENTS.md` says to merge only when every check has passed, which makes a red bombadil check a gate in practice.
+
+## Step 7: Fixes from the design review and from bombadil's first runs
+
+**Author:** builder
+
+### Prompt Context
+
+**Verbatim prompt:** The lead's brief, which opens: "You are a builder on regroup's group page: a round of fixes from a design review and from bombadil's first runs. Each behavioural fix proves itself: plant the fault, show that the new test fails, take the fault out."
+**Interpretation:** Fourteen items. Four from bombadil: a Comment button turned on again by an unrelated answer, a second opening of comments using up the "new" marks, a post or comment sent again being added twice or with an older day's heading above newer days, and stable markers for the person signed in and for authors. Ten from the design review: comments and their form arriving together after "Loading comments", one-line fields that grow without `field-sizing`, a 44px hit area for the comments summary, one-line day headings on a phone, a shared baseline for the margin name and the text, "Loading earlier posts" and an end line, no outline box on the post that takes the focus, the selection colour, a few hover and border details, and a sign that fills its band on a phone.
+**Inferred intent:** Close what bombadil found and what the design review asked for before Markus looks at the preview again, with tests that keep each fix in place.
+
+### What I did
+
+The page is in `/html/group.go`, the routes in `/http/timeline.go`, the field script in `/public/scripts/app.js`, the selection colour in `/tailwind.css`, and the checks in `/bombadil/page.ts` and `/bombadil/spec.ts`. Commits `dcb492e`, `0a61e57`, and, after review, `e7e56d8`.
+
+1. **Buttons stay off until their own request is answered.** The `datastar-fetch` listener counts, on each button, the requests it is off for (`b.sending`), and turns it on only when none is left. Every submit button also carries `data-preserve-attr="disabled"`, so an answer that puts the form back cannot turn its button on before Datastar says the request finished.
+2. **Opening comments.** The toggle expression sends nothing while a request about these comments is on its way: an opening (`el.opening`), or a comment, which turns the thread's Comment button off. An answer that came while the comments were closed is shown when they are opened again, instead of asking again (`el.unseen`). If an opening fails, the thread stops saying it is loading.
+3. **Adding is idempotent.** Every patch that adds a post is aimed at `#timeline:not(:has(#post-<id>))`, followed by the day's container, or with `:not(:has(#day-<date>-posts))` for a new day at the top, or `:not(:has([data-day]))` for the first post on an empty timeline. A post from a day older than the newest day the page names goes under its day if the page has it, and never brings a heading. "Earlier posts" adds each post of a day that goes on in its own guarded patch. The hidden fields of the forms have `autocomplete="off"`, so a browser does not fill in a used token and old days after a reload. Comments were already idempotent, since every answer replaces the list.
+4. **Markers.** `data-person` on the name on the sign, `data-author` on the names of authors of posts and comments. `/bombadil/page.ts` reads them, and a body by its `data-body` outside any comment. A new check, `oneRequestAtATime`, fails when a form or a thread starts a request while one of its own is on its way, or has its button on meanwhile. Two new actions, `reopenComments` and `commentWhileReopening`, make those overlaps on purpose.
+5. **Loading comments.** The place for a post's comments starts with `data-loading` and the line "Loading comments" (stone 600, 15px). The comment form after it has `[@media(scripting:enabled)]:peer-data-loading:hidden`, so it shows together with the list, and the line has `noscript:hidden`, so a browser without JavaScript gets the form and no line.
+6. **Fields.** Both fields are `rows="1"`. Where `CSS.supports("field-sizing", "content")` is false, `/public/scripts/app.js` sets the height from `scrollHeight` on input, on `pageshow`, and when a thread opens. `data-preserve-attr="style"` keeps that height when a refusal puts the same field back.
+7. **Hit area.** The summary has a `::before` reaching 8px above and 12px below its 24px line.
+8. **Day headings.** A written-out date is the weekday as a text node and the rest in a span with `max-sm:` sans classes; the heading is `sm:block`, so from 640px it is one line of serif as before.
+9. **Baseline.** `lg:items-baseline` on the post's grid.
+10. **Earlier posts.** `data-indicator="_loadingEarlier"` on the form and `data-text` on the button. `html.EarlierPostsProps.Posts` says the timeline has posts; with no next page the form holds "Nothing was posted before this." in stone 600.
+11. **Focus.** It did get an outline: with the keyboard used, the focused article matched `:focus-visible` and had a solid orange 700 outline. It now has `outline-hidden`, which leaves an outline only in forced colours.
+12. **Selection.** `::selection` in the base layer: primary 100 behind stone 900.
+13. **Details.** `group-hover:decoration-stone-900` on the summary's label, `border-stone-500` on secondary buttons, and the failure bar's words in a span with the page's column.
+14. **Sign.** `text-[length:clamp(44px,13vw,96px)]/[0.9]` below lg, 96px from lg.
+
+Decided by me, for the lead and Markus to overrule:
+
+- Item 2 is fixed in the browser, by one request about a post's comments at a time and by showing an answer that came while they were closed. The server cannot know which marks a page has shown, so an answer that cannot wipe them would need the page to send them back; the browser already knows when a request is on its way. Not opening while a comment is on its way also closes the same race between a comment's answer and an opening's.
+- Item 3 is fixed by selectors that Datastar checks against the page, decided by the server from the days the page names. A post older than the page's newest day is put under its day if the page has it, rather than not at all, so that every answer still shows what it made.
+- "Nothing was posted before this." does not appear after the first post on an empty timeline, because someone else may have posted after the page was loaded.
+- Without JavaScript the comment form shows when a thread opens, as before; it is the only way to comment without script.
+- The sign follows the brief's `clamp(44px, 13vw, 96px)`, which reaches 96px from about 740px wide.
+
+### Why
+
+Each item is a place where the page told the reader something untrue (a button that sends twice, marks that vanish, a post twice, "Loading" forever) or looked unfinished on a phone. The server cannot see the page, so the fixes that need to know what the page shows live in selectors and in the browser.
+
+### What worked
+
+- Planted faults, each failing as shown and passing again once taken out:
+  - Item 1, the old listener: `TestGroupPage/says_that_a_request_failed…` (`group_test.go:80: Not true`). In the browser, against a build with the old listener and toggle on its own port, with `/comments` slowed to 4 seconds and `/comments/open` to 1.5: the Comment button was on while its comment was on its way (`commentButtonDisabledAfterOpening: false`); with the fix, `true`.
+  - Item 2, the old toggle: `TestGroupPage/sends_every_form…` (`group_test.go:136: Expected "if (el.open && !el.opening…", but got "el.open && @post(…"`). In the browser: two openings sent and the "1 new" gone (`opensSent: 2, markedAfter: 0`); with the fix one opening and every mark kept (`opensSent: 1, markedAfter: 4`), and after review the same for open, close before the answer, open after it (`opens: 1, marked: 4`).
+  - Item 3: no guard failed the new tests (`a patch is aimed at #timeline #day-2031-03-14-posts, and the page has 0 of it`, `the page has #day-2031-03-14-heading twice`) and the history. The older-day rule taken out failed `TestTimeline_again/never_puts_the_heading_of_an_older_day…` (`Expected "2", but got "3"`), and hegel shrank the history to one that ends: "Ada posts \"Note 1\"; the clock is 2024-12-31T23:59:59.999Z; Ada posts \"Note 2\"; failure in worker 0: the page has the day 2025-01-01 after the day 2024-12-31". Earlier posts without per-post guards: `the page has #post-p_14516b74… twice`. The new-day guard without the day: `the page has #day-2031-03-14-heading twice`; the empty-timeline guard without `[data-day]`: `Expected slice of length 2, but got 1`.
+  - Item 4: `data-person` removed (`group_test.go:174: Expected slice of length 1, but got 0`), `data-author` removed from posts (`group_test.go:175: Expected slice of length 2, but got 1`). Bombadil with "a person's own post is marked new" planted in `/sqlite/timeline.go` (`p.author_id != :reader` taken out): `ownWritingNeverNew` at 0.147s, "post p_5e3e… by Ibrahim is marked new for them".
+  - Item 5: `Loading: true` removed (`group_test.go:474: the place for the comments is not marked as loading`, `timeline_test.go:1398: Expected "Loading comments", but got ""`); the form's class removed (`group_test.go:478: Not true`).
+  - Item 10: the end line removed (`group_test.go:594`, `timeline_test.go:1280: Expected "1", but got "0"`); shown on an empty timeline (`timeline_test.go:1269: Expected "0", but got "1"`); `data-text` removed (`group_test.go:588`).
+  - Item 11: `outline-hidden` removed (`group_test.go:453`). Item 8: the date's classes not limited to phones (`group_test.go:524`).
+  - Item 6, in Chrome with `CSS.supports` made to say no and `field-sizing: fixed` set through the CSSOM: without the script the field stayed 52px with a `scrollHeight` of 102; with it, 104px for three lines, back to 78 for two, and 182px kept after a refusal (`style.height` "182px").
+- Bombadil, `make bombadil` (3 minutes): no rule broke on the final code. With the old listener and the old toggle planted, `oneRequestAtATime` broke at 0.350s on a thread; with only the old listener planted and the toggle's check for a comment on its way taken out, it broke at 1.843s on a comment form.
+- The browser, my own preview build on ports 28711 to 28715: `field-sizing` is supported in Chrome 158, WebKit 26 (Safari 26.0), and the Firefox Nightly playwright had (revision 1572), where both fields are 52px empty and grow to 104px; the margin name and the first line of text were 12px apart before `lg:items-baseline` and 0 after; the summary's hit area answers 8px above and 12px below it; the sign is 50.7px at 390px and 96px at 1440px; without JavaScript an opened thread shows the form and no loading line; a failed opening shows the failure bar, the form, and no loading line, and opening again loads the comments.
+- `make lint`: 0 issues. `make test`: every package ok. `go test -race -shuffle on -count=1 -tags sqlite_fts5,sqlite_math_functions,sqlite_foreign_keys ./html ./http`: ok. `HISTORY_CASES=300 HISTORY_STEPS=40` for both histories: ok (7.6s and 15.0s).
+- `impeccable detect --json --changed` returned `[]` (after the commit, so I also ran it on `/html/group.go`, `/tailwind.css`, and `/public/scripts/app.js`: `[]`).
+
+### What didn't work
+
+- `playwright-cli open --browser=firefox` answered "Browser \"firefox\" is not installed", and `playwright-cli install-browser firefox` answered "The browser 'default' is not open". Installing with `node …/playwright-core/cli.js install firefox` downloaded 888 KB in 20 minutes and I stopped it (exit 144). Playwright had an older Firefox build in its cache (revision 1572), which `playwright-cli open --config` with an `executablePath` started.
+- `data.Indicator("_loading-earlier")` rendered `data-indicator="_loading-earlier"`, and Datastar uses a value as the signal's name as it is, so `$_loadingEarlier` would never have changed. It is `data.Indicator("_loadingEarlier")`.
+- My first try at phone-only classes built them with a Go function, which Tailwind cannot see in the source. They are written out.
+- A plant helper of mine reverted with a string that matched eight places (`Span(Class(`), threw, and left `data-person` out of `/html/group.go` until I put it back by hand. Plants since use unique markers.
+- A background bombadil run with a planted fault ended after its script, so the revert in its `.then` never ran ("Tool calls that came too late and were not made: Read"); I reverted by hand, and ran later plants inside one awaited script.
+- Emptying `app.js` in a running preview showed no difference at first: the browser kept the hashed file. A new browser context showed the fault.
+- With fault 1 planted alone, after review, bombadil found nothing in 3 minutes: the new toggle opens nothing while a comment is on its way, so the old listener's fault can no longer be reached from the page. It was reached again once the toggle's check was taken out too.
+- A clean bombadil run after review broke `answersShowWhatWasDone` on a comment of U+FFF3: "refused with \"Write something first.\"". The app was right, as `model.visible` counts unassigned default-ignorable code points as invisible; `clean()` in `/bombadil/page.ts` only knew `\p{Cf}`. It now follows `model.visible`.
+- `.bombadil/` runs leave traces; the directory is ignored.
+
+### What I learned
+
+- Datastar 1.0.3 warns, without an error, when a patch's selector matches nothing (`PatchElementsNoTargetsFound`), which is what makes `:not(:has())` guards usable.
+- Datastar's morph sets a boolean attribute such as `disabled` from the new element unless the new element lists it in `data-preserve-attr`, and removes a `style` attribute the new element lacks.
+- `data-indicator` with a value names the signal exactly; with a key, the key is turned into camel case.
+- Datastar dispatches `finished` in a `finally`, after the answer's patches, so a request that fails still ends.
+- Tailwind 4 has a `noscript:` variant (`@media (scripting: none)`), and an arbitrary `[@media(scripting:enabled)]:` variant composes with `peer-data-loading:`.
+
+### What was tricky
+
+- Item 1 and item 2 meet: the reason the opening turns the Comment button off is to stop a comment's answer and an opening's answer replacing each other, and the reason the button needs a count is that both turn it off. Once nothing opens while a comment is on its way, the count is defence in depth.
+- Keeping the history model honest about a post the page does not show: every answer still carries the post, and the page decides with a selector whether it goes in.
+
+### What warrants review
+
+Self-review: the `code-review` skill, two competing reviewers on `a46de93..HEAD`.
+
+Found by both, and fixed: commenting without JavaScript was no longer possible, since the form was hidden until an answer; a failed opening left "Loading comments" and no form; a post sent again into a partly loaded day was added a second time by "Earlier posts"; the height the script set was lost on a refusal; `checkVisibility()` is missing in Safari before 17.4; a comment on its way did not stop an opening; two branches in `POST /posts` had the same body; `outline-none` also hid the outline in forced colours; comments that looked outward or were stale (the toggle's comment named what the routes record, `apply`'s doc, page.ts); `guardedSelector` used once; `attributeOK` used once.
+
+Found by one, and fixed because they could put a wrong page in front of someone: an answer that came while the comments were closed was replaced by asking again (reviewer B); a browser keeping the days field over a reload could add a second heading for a day, or replace a timeline that has days (B, demonstrated); `commentWhileReopening` used `Date.now()` and sent an empty comment when the race did not happen (both, partly); bombadil had no direct check that a button is off while its request is on its way (B). `gofmt` flagged one line (B).
+
+Not changed, recorded under "Known and not fixed" in `/docs/todo/group-page.md`: a post sent again into a partly shown day can land above newer posts; an older-day post the page lacks is not shown though the composer empties; no `:has()` support means no new posts until a reload; one-line fields without `field-sizing` and without script; no end line after the first post on an empty timeline; phone headings with a long weekday or a year, and long group names between 640 and 1024px; an opening whose answer never comes. Not changed and not recorded there: the visual items (7, 8, 9, 12, 13, 14) and `app.js` are checked by measuring in a browser, not by a test, and the listener and the toggle are tested in Go only as strings, with bombadil as the behavioural check.
+
+Gaps in the rules, with a sentence to propose:
+
+- Opening comments: "The marks on comments show what was new when the reader opened them, until the reader opens them again."
+
+Validate with `make lint`, `make test`, `make bombadil`, and `go test -race -shuffle on -tags sqlite_fts5,sqlite_math_functions,sqlite_foreign_keys ./...`. On the preview: open a post's comments on a slow connection and see "Loading comments", then the comments and the field together; double-click a summary and see the "new" marks stay; load earlier posts and see "Loading earlier posts", then "Nothing was posted before this."; select text and see the pale orange; on a phone, see each day heading on one line. The screenshots are in the session's scratchpad under `e-shots`.
+
+### Future work
+
+- Bombadil runs Chrome, which has `field-sizing`, so `app.js` only runs in my emulation; a run in an older Safari or Firefox would exercise it.
+- A per-post guard for the sections "Earlier posts" brings is not needed today, since a post on the page always has its day's section; it would be if that changed.

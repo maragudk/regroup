@@ -48,6 +48,13 @@ The page a member opens: the group's timeline. Agreed with Markus on 2026-11-26.
 - The same post sent again is shown without the comments it got in the meantime, until a reload.
 - After a post, the answer replaces the composer before it adds the post. If the answer breaks off in between, the field is empty, the post is not on the page, and the form has a new token, so writing it again makes a second post.
 - Fraunces is served as TrueType, 384,052 bytes against 210,032 as WOFF2, and the compression in glue does not cover `font/ttf`, so it goes out uncompressed.
+- A post sent again from a page that shows its day only in part can land above newer posts of that day until a reload. Since the browser no longer fills in a form's hidden fields again, only a crafted request or a clock that went back gets there.
+- A post from a day older than the newest day the page shows is added only if the page has its day, and otherwise shows after a reload, though the field empties and screen readers hear that it is on the timeline. That happens when the host's clock goes back past midnight.
+- A browser without `:has()` in CSS (Firefox before 121, Safari before 15.4) shows a new post only after a reload.
+- A browser that can neither size a field to its content nor run the page's script keeps the fields one line tall, and they scroll.
+- After the first post on an empty timeline, "Nothing was posted before this." shows only after a reload, since someone else may have posted in the meantime.
+- On a phone, "Yesterday" with a long weekday, and a date written out with its year, put their date on a second, small line. Between 640 and 1024 pixels wide, a group name with a long word breaks inside the word.
+- Comments whose opening never gets an answer cannot be opened again until the request ends.
 
 ## Not in the first build
 
