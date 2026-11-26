@@ -500,3 +500,54 @@ Validate with `make lint`, `make test`, and `go test -race -shuffle on -tags sql
 - Keep a page per person in the router's driver, apply the answers to posts and comments to it, and check it after each, once a post sent again is idempotent on the page.
 - The nightly workflow can set `HISTORY_CASES` and `HISTORY_STEPS`.
 - Replaying a failure from its reproduction blob is still untried; the printed draws were enough to read every failure here.
+
+## Step 6: Bombadil checks, their run script, and workflow
+
+**Author:** main, from the report of a parallel builder that worked in its own worktree (branch `worktree-agent-a83b2d1e693ab7451`, merged as `5518414`)
+
+### Prompt Context
+
+**Verbatim prompt:** "I'd also like to use property-based testing with hegel in the Go code where it makes sense. https://hegel.dev (you have a hegel skill). Also, check out bombadil in a subagent, I've installed the CLI: https://github.com/antithesishq/bombadil . And also the usual unit and integration testing, and fuzz testing where it makes sense. Let's make this app robust."
+**Interpretation:** Write the product's rules for the group page as bombadil checks, give them a one-command local run, a short run on pull requests that is not a merge gate, and a nightly run on `main` that opens an issue when it fails.
+**Inferred intent:** Markus does not read code, so a browser that explores the app on its own and checks the rules is part of what carries the trust.
+
+### What I did
+
+The builder added `/bombadil/spec.ts` (the checks and one weighted action generator), `/bombadil/page.ts` (what the checks read from the page, and a recorder that notes each post, comment, opening of comments, and "Earlier posts" when it is sent and checks the page when Datastar reports the answer is in), `/bombadil/run.sh` and `make bombadil` (builds the preview build, copies `/public` and the migrations to a temporary directory, starts the app on a free port with a fresh database, runs for 3 minutes by default or for `BOMBADIL_TIME_LIMIT`, and cleans up, also on Ctrl-C and SIGTERM), `/bombadil/install.sh` (bombadil 0.8.0 pinned by sha256 for macOS arm64 and Linux x86_64 and arm64), and `/.github/workflows/bombadil.yml` (3 minutes at desktop size on pull requests; 20 minutes at 1280x800 plus 10 minutes at 390x844 nightly at 02:41 UTC and by hand; a separate job, the only one that may write issues, opens or comments on an issue labelled `bombadil` when a run on `main` fails). It documented running it and reading a failure in `/docs/research/bombadil.md`. I merged the branch into `worktree-product-md`, resolving one conflict in `/docs/todo/verification.md` by keeping both builders' remaining items.
+
+The checks: `privatePageShowsNothing`, `ownWritingNeverNew`, `answersShowWhatWasDone`, `timelineInOrder`, `nothingTwice`, `writingShownAsText`, `failureBarOnlyOnFailure`, `noFailedRequests`, `noOtherHosts`, `noContentSecurityPolicyViolations`, and bombadil's own `noConsoleErrors`, `noHttpErrorCodes`, `noUncaughtExceptions`, and `noUnhandledPromiseRejections`.
+
+### Why
+
+Bombadil sees what the Go tests cannot: the page as a browser runs it, with requests that overlap, a strict content security policy, and whatever a random walk of clicks and text produces.
+
+### What worked
+
+Checking each answer in the page at the moment Datastar reports it finished made the checks exact. A deliberately failing check showed the recorder had checked 32 posts, 15 comments, 16 openings, and 10 "Earlier posts" in 12 seconds. Six faults planted in the app were each caught: a person's own post marked new (`ownWritingNeverNew`, 3 seconds in), the group's name on the private page (`privatePageShowsNothing`), a posted post rendered twice (`answersShowWhatWasDone` and `nothingTwice`), a link to a font host (`noOtherHosts`), the failure bar shown after every request (`failureBarOnlyOnFailure`), and a comment count one too high (`answersShowWhatWasDone`).
+
+### What didn't work
+
+- Exporting every action generator made bombadil pick evenly between them: 230 sign-outs in 90 seconds. The spec now exports one generator that weights the actions itself.
+- `String.raw` broke on a dollar sign followed by braces ("Unexpected }"), and four-digit Unicode escapes were refused; the builder used the braced form of the escape.
+- The first issue script lost its backticks to command substitution ("main: command not found").
+- `go run github.com/rhysd/actionlint/...` was refused by the permission classifier as "Undermining Oversight", so the workflow was checked only by parsing the YAML, checking the shell syntax, confirming the action versions exist, and running the issue script against a fake `gh`.
+- Before the favicon landed, every run failed at its first state on the 404 for `/favicon.ico`.
+
+### What I learned
+
+One browser is one person at a time, so bombadil cannot check that one person's actions leave another's marks alone, nor whether a post is new since the reader's last look. The stateful hegel tests of step 5 cover those. Action arguments travel as JSON, so a lone surrogate reached the page as the six characters `\uD800`; it is now built in the page.
+
+### What was tricky
+
+False alarms. Requests that overlap, and pages the browser restores from its back/forward cache, both made honest pages fail the first versions of the checks. Comparisons are skipped in those two cases.
+
+### What warrants review
+
+- `/bombadil/page.ts` finds the signed-in person's name with `header .ml-auto > span:first-child`, and authors by structure. The app needs markers such as `data-person` and `data-author`.
+- `clean()` in `/bombadil/page.ts` copies Go's body cleaning with nothing tying the two together.
+- The workflow had never run on GitHub when the branch was merged. Whether Chrome on the runner works with `--no-sandbox`, and whether the app starts there without AWS settings, was untried.
+- Bombadil found two faults in the app, which the builder did not fix: when opening a post's comments finishes, the page re-enables every button in that thread, including the Comment button of a comment still on its way, so it can be sent twice (the `datastar-fetch` handler in `/html/group.go`); and opening a post's comments twice before the first answer arrives clears the new marks before the reader has seen them.
+
+### Future work
+
+Fix the two faults, add the markers, see the workflow run on GitHub, and decide when bombadil becomes a merge gate. The memory in `/AGENTS.md` says to merge only when every check has passed, which makes a red bombadil check a gate in practice.
