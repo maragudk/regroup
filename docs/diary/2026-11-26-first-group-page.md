@@ -700,3 +700,49 @@ Telling which fuzz target failed, because artefacts merge flat; `failure()` in a
 ### Future work
 
 Start the workflow by hand once it is on `main`, and fix what the first run shows.
+
+## Step 9: Design review, the design record, the preview, and the screenshot page
+
+**Author:** main
+
+### Prompt Context
+
+**Verbatim prompt:** "Both"
+**Interpretation:** Markus's answer on 2026-11-26 to how he wants to look at each piece of work: a preview instance he uses himself, and a page of screenshots.
+**Inferred intent:** He is the oracle for product behaviour and does not read code, so each piece of work has to end in something he can use and something he can look at.
+
+### What I did
+
+I had the impeccable finish reviewer compare the build with the direction contract in `/.impeccable/surfaces/html-group-go.md` and the chosen sketch. Its verdict was "fix", with eleven fixes and no objection to the direction; step 7 made them. I then had the impeccable documenter write `/DESIGN.md` and `/.impeccable/design.json` from the page as built, and I brought two stale lines in `/PRODUCT.md` up to date. A sub-agent started a standing preview on the Mac mini (a binary built with the `preview` tag, run from the session's scratch directory in a Rex tab named "regroup preview", on port 8650, reachable over Tailscale) and published a private Artifact with fourteen screenshots at desktop and phone sizes. Both were refreshed after step 7. I also told the design detector that Fraunces is Markus's choice (`/.impeccable/config.json`), since it flags the font as overused.
+
+### Why
+
+The review checks the build against what was agreed before Markus spends time on it. The design record is what the builders of the next surfaces (sign-in, invitations, events, photos) work from.
+
+### What worked
+
+The finish reviewer worked from files and screenshots alone and still found the faults that mattered on a phone: the day headings breaking onto two heavy lines, the comments link too small to tap, and the sign's lettering filling only half its band.
+
+### What didn't work
+
+- The preview's first start failed with "no such table: users": glue reads `sqlite/migrations` and `public/` from the working directory, not from the binary, so both are copied beside the binary.
+- On the refresh, macOS killed the new binary ("zsh: killed ./app") because it had been copied over the old file in place. Deleting the file first fixed it.
+- The reviewer could not open the running preview or take screenshots, so the refused post, keyboard focus, loading, and the failure bar were judged from the code.
+
+### What I learned
+
+The preview needs no S3 stand-in: nothing talks to S3 at start-up, so a dummy endpoint is enough. The built stylesheet is git-ignored, so a preview has to build it before copying `public/`.
+
+### What was tricky
+
+Keeping a preview that outlives the session's sub-agents without `nohup`: a Rex tab does it, and Markus can see and stop it there.
+
+### What warrants review
+
+- The preview runs from a scratch directory, which a reboot can clear, and it is refreshed by hand. A lasting preview that follows `main` is still to build (`/docs/todo/verification.md`).
+- The preview's sign-in route is open to anyone who can reach the port. It holds only made-up data.
+- The documenter recorded where the build departs from the brief: fields and secondary buttons have a stone 500 border where the brief says hairlines only, and orange 700 is also the colour of keyboard focus.
+
+### Future work
+
+The lasting preview; Markus's verdict on the page and on the "new" marks; and the spec proposals that came out of the build, one at a time.

@@ -34,7 +34,7 @@ What success means, beyond the shared office group using it, is not yet defined.
 - The pace is closer to a forum or email than to a group chat. People take part on their own schedule.
 - The default notification is a daily digest by email. Each person sets the frequency for themselves, per group, from no emails up to immediate. Nobody else can override it, not even a group admin.
 - `regroup.social` is a marketing site only. It is separate from this repository.
-- The repository is still close to its starter template: one placeholder page, and no groups, posts, or moderation yet.
+- The repository has its first surface: the group page, with a timeline of posts and comments, in a preview build with made-up people. There is no sign-in, and there are no roles, invitations, events, photos, or moderation yet.
 
 ## Capabilities and Constraints
 

@@ -1,0 +1,411 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-26T20:30:29.355Z",
+  "title": "Design System: regroup",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Shop-Sign Orange",
+        "canonical": "oklch(70.5% 0.213 47.604)",
+        "tonalRamp": [
+          "oklch(26.6% 0.079 36.259)",
+          "oklch(40.8% 0.123 38.172)",
+          "oklch(47% 0.157 37.304)",
+          "oklch(55.3% 0.195 38.402)",
+          "oklch(70.5% 0.213 47.604)",
+          "oklch(83.7% 0.128 66.29)",
+          "oklch(95.4% 0.038 75.164)",
+          "oklch(98% 0.016 73.684)"
+        ],
+        "source": "--color-primary-500, alias of Tailwind orange 500"
+      },
+      "primary-hover": {
+        "role": "primary",
+        "displayName": "Lit Sign",
+        "canonical": "oklch(75% 0.183 55.934)",
+        "tonalRamp": [
+          "oklch(26.6% 0.079 36.259)",
+          "oklch(40.8% 0.123 38.172)",
+          "oklch(47% 0.157 37.304)",
+          "oklch(55.3% 0.195 38.402)",
+          "oklch(70.5% 0.213 47.604)",
+          "oklch(83.7% 0.128 66.29)",
+          "oklch(95.4% 0.038 75.164)",
+          "oklch(98% 0.016 73.684)"
+        ],
+        "source": "--color-primary-400, alias of orange 400"
+      },
+      "primary-active": {
+        "role": "primary",
+        "displayName": "Pressed Sign",
+        "canonical": "oklch(64.6% 0.222 41.116)",
+        "tonalRamp": [
+          "oklch(26.6% 0.079 36.259)",
+          "oklch(40.8% 0.123 38.172)",
+          "oklch(47% 0.157 37.304)",
+          "oklch(55.3% 0.195 38.402)",
+          "oklch(70.5% 0.213 47.604)",
+          "oklch(83.7% 0.128 66.29)",
+          "oklch(95.4% 0.038 75.164)",
+          "oklch(98% 0.016 73.684)"
+        ],
+        "source": "--color-primary-600, alias of orange 600"
+      },
+      "primary-ink": {
+        "role": "primary",
+        "displayName": "Lettering Orange",
+        "canonical": "oklch(55.3% 0.195 38.402)",
+        "tonalRamp": [
+          "oklch(26.6% 0.079 36.259)",
+          "oklch(40.8% 0.123 38.172)",
+          "oklch(47% 0.157 37.304)",
+          "oklch(55.3% 0.195 38.402)",
+          "oklch(70.5% 0.213 47.604)",
+          "oklch(83.7% 0.128 66.29)",
+          "oklch(95.4% 0.038 75.164)",
+          "oklch(98% 0.016 73.684)"
+        ],
+        "source": "--color-primary-700, alias of orange 700"
+      },
+      "primary-tint": {
+        "role": "primary",
+        "displayName": "Paper Tint",
+        "canonical": "oklch(95.4% 0.038 75.164)",
+        "tonalRamp": [
+          "oklch(26.6% 0.079 36.259)",
+          "oklch(40.8% 0.123 38.172)",
+          "oklch(47% 0.157 37.304)",
+          "oklch(55.3% 0.195 38.402)",
+          "oklch(70.5% 0.213 47.604)",
+          "oklch(83.7% 0.128 66.29)",
+          "oklch(95.4% 0.038 75.164)",
+          "oklch(98% 0.016 73.684)"
+        ],
+        "source": "--color-primary-100, alias of orange 100"
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "#ffffff"
+        ],
+        "source": "Tailwind white"
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Shop Ink",
+        "canonical": "oklch(21.6% 0.006 56.043)",
+        "tonalRamp": [
+          "oklch(14.7% 0.004 49.25)",
+          "oklch(21.6% 0.006 56.043)",
+          "oklch(26.8% 0.007 34.298)",
+          "oklch(37.4% 0.01 67.558)",
+          "oklch(55.3% 0.013 58.071)",
+          "oklch(86.9% 0.005 56.366)",
+          "oklch(97% 0.001 106.424)",
+          "oklch(98.5% 0.001 106.423)"
+        ],
+        "source": "Tailwind stone 900"
+      },
+      "muted-ink": {
+        "role": "neutral",
+        "displayName": "Pencil",
+        "canonical": "oklch(44.4% 0.011 73.639)",
+        "tonalRamp": [
+          "oklch(14.7% 0.004 49.25)",
+          "oklch(21.6% 0.006 56.043)",
+          "oklch(26.8% 0.007 34.298)",
+          "oklch(37.4% 0.01 67.558)",
+          "oklch(55.3% 0.013 58.071)",
+          "oklch(86.9% 0.005 56.366)",
+          "oklch(97% 0.001 106.424)",
+          "oklch(98.5% 0.001 106.423)"
+        ],
+        "source": "Tailwind stone 600"
+      },
+      "field-stroke": {
+        "role": "neutral",
+        "displayName": "Field Line",
+        "canonical": "oklch(55.3% 0.013 58.071)",
+        "tonalRamp": [
+          "oklch(14.7% 0.004 49.25)",
+          "oklch(21.6% 0.006 56.043)",
+          "oklch(26.8% 0.007 34.298)",
+          "oklch(37.4% 0.01 67.558)",
+          "oklch(55.3% 0.013 58.071)",
+          "oklch(86.9% 0.005 56.366)",
+          "oklch(97% 0.001 106.424)",
+          "oklch(98.5% 0.001 106.423)"
+        ],
+        "source": "Tailwind stone 500"
+      },
+      "underline": {
+        "role": "neutral",
+        "displayName": "Underline",
+        "canonical": "oklch(70.9% 0.01 56.259)",
+        "tonalRamp": [
+          "oklch(14.7% 0.004 49.25)",
+          "oklch(21.6% 0.006 56.043)",
+          "oklch(26.8% 0.007 34.298)",
+          "oklch(37.4% 0.01 67.558)",
+          "oklch(55.3% 0.013 58.071)",
+          "oklch(86.9% 0.005 56.366)",
+          "oklch(97% 0.001 106.424)",
+          "oklch(98.5% 0.001 106.423)"
+        ],
+        "source": "Tailwind stone 400"
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "oklch(92.3% 0.003 48.717)",
+        "tonalRamp": [
+          "oklch(14.7% 0.004 49.25)",
+          "oklch(21.6% 0.006 56.043)",
+          "oklch(26.8% 0.007 34.298)",
+          "oklch(37.4% 0.01 67.558)",
+          "oklch(55.3% 0.013 58.071)",
+          "oklch(86.9% 0.005 56.366)",
+          "oklch(97% 0.001 106.424)",
+          "oklch(98.5% 0.001 106.423)"
+        ],
+        "source": "Tailwind stone 200"
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The group's name on the sign, and only there. clamp(44px, 13vw, 96px) with line-height 0.9 below 1024px."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Day headings and the headline of a plain message page. 40px below 1024px."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "The author of a post, in primary 700. 28px below 1024px."
+      },
+      "title-small": {
+        "displayName": "Title small",
+        "purpose": "The author of a comment, in primary 700. The member's own name on the sign is the same serif at 18px/24px, weight 640."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Post and comment text, fields, and buttons. Reading column at most 608px."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Small text on the sign, times (tabular figures), the comments summary, the new mark, loading and end lines."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "fade-in",
+        "value": "fade-in 180ms cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Comments arriving in an opened thread. Only under motion-safe; nothing else moves."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "md",
+        "value": "768px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      },
+      {
+        "name": "xl",
+        "value": "1280px"
+      },
+      {
+        "name": "page-max",
+        "value": "1440px"
+      }
+    ],
+    "focus": {
+      "value": "2px solid oklch(55.3% 0.195 38.402), offset 3px",
+      "onSign": "2px solid oklch(21.6% 0.006 56.043), offset 3px",
+      "purpose": "Keyboard focus everywhere; on the orange sign the outline is stone 900."
+    },
+    "selection": {
+      "background": "oklch(95.4% 0.038 75.164)",
+      "color": "oklch(21.6% 0.006 56.043)"
+    }
+  },
+  "components": [
+    {
+      "name": "The Sign",
+      "kind": "custom",
+      "refersTo": "sign",
+      "description": "Full-width orange band at the top of a group page carrying the group's name.",
+      "html": "<header class=\"ds-sign\"><div class=\"ds-sign-top\"><span>regroup</span><span>14 members</span><span class=\"ds-sign-person\">Markus</span></div><h1 class=\"ds-sign-name\">The Loft</h1></header>",
+      "css": ".ds-sign { background: oklch(70.5% 0.213 47.604); color: oklch(21.6% 0.006 56.043); padding: 18px 72px 30px; min-height: 152px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; box-sizing: border-box; } .ds-sign-top { display: flex; align-items: baseline; gap: 20px; font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 15px; line-height: 24px; } .ds-sign-person { margin-left: auto; font-family: Fraunces, ui-serif, Georgia, serif; font-variation-settings: \"SOFT\" 100, \"WONK\" 0; font-weight: 640; font-size: 18px; } .ds-sign-name { margin: 0; font-family: Fraunces, ui-serif, Georgia, serif; font-variation-settings: \"SOFT\" 100, \"WONK\" 0; font-weight: 620; font-size: 96px; line-height: 0.8; letter-spacing: -0.02em; }"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one filled button on a surface (\"Post\").",
+      "html": "<button class=\"ds-btn-primary\">Post</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; height: 52px; padding: 0 22px; border: none; border-radius: 9999px; background: oklch(70.5% 0.213 47.604); color: oklch(21.6% 0.006 56.043); font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 17px; cursor: pointer; } .ds-btn-primary:hover { background: oklch(75% 0.183 55.934); } .ds-btn-primary:active { background: oklch(64.6% 0.222 41.116); } .ds-btn-primary:focus-visible { outline: 2px solid oklch(55.3% 0.195 38.402); outline-offset: 3px; } .ds-btn-primary:disabled { opacity: 0.6; cursor: default; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Every button but the primary one (\"Comment\", \"Earlier posts\").",
+      "html": "<button class=\"ds-btn-secondary\">Comment</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; align-items: center; height: 44px; padding: 0 18px; border: 1px solid oklch(55.3% 0.013 58.071); border-radius: 9999px; background: #fff; color: oklch(21.6% 0.006 56.043); font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 17px; cursor: pointer; } .ds-btn-secondary:hover { border-color: oklch(21.6% 0.006 56.043); } .ds-btn-secondary:focus-visible { outline: 2px solid oklch(55.3% 0.195 38.402); outline-offset: 3px; } .ds-btn-secondary:disabled { opacity: 0.6; cursor: default; }"
+    },
+    {
+      "name": "Composer Field",
+      "kind": "input",
+      "refersTo": "input-composer",
+      "description": "One-line pill field that grows with its text, with the primary button beside it.",
+      "html": "<div class=\"ds-composer\"><textarea class=\"ds-field\" rows=\"1\" placeholder=\"Write to the group\" aria-label=\"Write to the group\"></textarea><button class=\"ds-btn-primary\">Post</button></div>",
+      "css": ".ds-composer { display: flex; align-items: flex-end; gap: 8px; max-width: 608px; } .ds-field { field-sizing: content; flex: 1; min-width: 0; min-height: 52px; max-height: 50vh; padding: 12px 22px; resize: none; border: 1px solid oklch(55.3% 0.013 58.071); border-radius: 26px; background: #fff; color: oklch(21.6% 0.006 56.043); caret-color: oklch(55.3% 0.195 38.402); font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 17px; line-height: 26px; box-sizing: border-box; } .ds-field::placeholder { color: oklch(55.3% 0.013 58.071); } .ds-field:hover { border-color: oklch(21.6% 0.006 56.043); } .ds-field:focus-visible { border-color: oklch(55.3% 0.195 38.402); outline: 2px solid oklch(55.3% 0.195 38.402); outline-offset: -1px; } .ds-btn-primary { display: inline-flex; align-items: center; height: 52px; padding: 0 22px; border: none; border-radius: 9999px; background: oklch(70.5% 0.213 47.604); color: oklch(21.6% 0.006 56.043); font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 17px; cursor: pointer; } .ds-btn-primary:hover { background: oklch(75% 0.183 55.934); }"
+    },
+    {
+      "name": "Post with Name in the Margin",
+      "kind": "custom",
+      "refersTo": "author-name",
+      "description": "A post: the author's name as display type in the margin column, the time and new mark beneath, the text at reading width.",
+      "html": "<article class=\"ds-post\"><div><h3 class=\"ds-author\">Ibrahim</h3><div class=\"ds-meta\"><time>10:15</time><span class=\"ds-new\"><span class=\"ds-dot\"></span>new</span></div></div><div><p class=\"ds-body\">The corner window by the printer will not close properly. I have taped it for now, so please do not open it.</p><a class=\"ds-summary\" href=\"#\">1 comment</a></div></article>",
+      "css": ".ds-post { display: grid; grid-template-columns: 200px 608px; column-gap: 32px; align-items: baseline; margin-bottom: 36px; } .ds-author { margin: 0; font-family: Fraunces, ui-serif, Georgia, serif; font-variation-settings: \"SOFT\" 100, \"WONK\" 0; font-weight: 640; font-size: 36px; line-height: 1; letter-spacing: -0.005em; color: oklch(55.3% 0.195 38.402); } .ds-meta { display: flex; align-items: baseline; gap: 12px; margin-top: 8px; font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 15px; line-height: 24px; color: oklch(44.4% 0.011 73.639); font-variant-numeric: tabular-nums; } .ds-new { display: inline-flex; align-items: center; gap: 7px; color: oklch(55.3% 0.195 38.402); } .ds-dot { width: 9px; height: 9px; border-radius: 9999px; background: oklch(70.5% 0.213 47.604); } .ds-body { margin: 0; font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 17px; line-height: 1.6; color: oklch(21.6% 0.006 56.043); white-space: pre-wrap; } .ds-summary { display: inline-block; margin-top: 8px; font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 15px; line-height: 24px; color: oklch(44.4% 0.011 73.639); text-decoration: underline; text-decoration-color: oklch(70.9% 0.01 56.259); text-decoration-thickness: 1px; text-underline-offset: 4px; } .ds-summary:hover { color: oklch(21.6% 0.006 56.043); text-decoration-color: oklch(21.6% 0.006 56.043); } .ds-summary:focus-visible { outline: 2px solid oklch(55.3% 0.195 38.402); outline-offset: 3px; }"
+    },
+    {
+      "name": "Day Heading",
+      "kind": "custom",
+      "refersTo": "headline",
+      "description": "The largest type below the sign: the day in the serif, the date beside it small in the sans.",
+      "html": "<h2 class=\"ds-day\">Today <span class=\"ds-day-date\">Thursday 26 November</span></h2>",
+      "css": ".ds-day { margin: 0 0 28px; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 20px; font-family: Fraunces, ui-serif, Georgia, serif; font-variation-settings: \"SOFT\" 100, \"WONK\" 0; font-weight: 620; font-size: 64px; line-height: 1; letter-spacing: -0.015em; color: oklch(21.6% 0.006 56.043); } .ds-day-date { font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 16px; line-height: 1; letter-spacing: normal; color: oklch(44.4% 0.011 73.639); white-space: nowrap; }"
+    },
+    {
+      "name": "Comment Thread",
+      "kind": "custom",
+      "refersTo": "comment-author-name",
+      "description": "Comments open in place behind a single hairline, with the comment field after them.",
+      "html": "<div class=\"ds-thread\"><ol class=\"ds-comments\"><li><p class=\"ds-c-head\"><span class=\"ds-c-author\">Thomas</span><span class=\"ds-c-time\">08:45</span><span class=\"ds-new\"><span class=\"ds-dot\"></span>new</span></p><p class=\"ds-c-body\">Happy birthday!</p></li></ol></div>",
+      "css": ".ds-thread { border-left: 1px solid oklch(92.3% 0.003 48.717); padding-left: 24px; max-width: 584px; } .ds-comments { list-style: none; margin: 0 0 20px; padding: 0; display: grid; gap: 16px; animation: ds-fade 180ms cubic-bezier(0.16, 1, 0.3, 1); } @media (prefers-reduced-motion: reduce) { .ds-comments { animation: none; } } @keyframes ds-fade { from { opacity: 0; } } .ds-c-head { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; } .ds-c-author { font-family: Fraunces, ui-serif, Georgia, serif; font-variation-settings: \"SOFT\" 100, \"WONK\" 0; font-weight: 680; font-size: 20px; line-height: 28px; color: oklch(55.3% 0.195 38.402); } .ds-c-time { font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 15px; line-height: 24px; color: oklch(44.4% 0.011 73.639); } .ds-new { display: inline-flex; align-items: center; gap: 7px; font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 15px; color: oklch(55.3% 0.195 38.402); } .ds-dot { width: 9px; height: 9px; border-radius: 9999px; background: oklch(70.5% 0.213 47.604); } .ds-c-body { margin: 0; font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 17px; line-height: 1.6; color: oklch(21.6% 0.006 56.043); }"
+    },
+    {
+      "name": "Refusal Message",
+      "kind": "custom",
+      "refersTo": "input-composer",
+      "description": "Why a field was refused: an inline outline icon and a sentence in stone 900. No red.",
+      "html": "<p class=\"ds-refusal\" role=\"alert\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 18 18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" aria-hidden=\"true\"><circle cx=\"9\" cy=\"9\" r=\"7.25\"/><path d=\"M9 5.25v4.5M9 12.6v.15\"/></svg><span>Write something first.</span></p>",
+      "css": ".ds-refusal { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 0; font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 17px; line-height: 1.6; color: oklch(21.6% 0.006 56.043); } .ds-refusal svg { margin-top: 5px; flex-shrink: 0; }"
+    },
+    {
+      "name": "Failure Bar",
+      "kind": "custom",
+      "refersTo": "failure-bar",
+      "description": "Flat band of stone 900 at the foot of the window when a request fails.",
+      "html": "<p class=\"ds-failure\" role=\"alert\">That did not go through. Try again, and reload the page if it keeps happening.</p>",
+      "css": ".ds-failure { margin: 0; background: oklch(21.6% 0.006 56.043); color: #fff; padding: 12px 72px; font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 17px; line-height: 1.6; }"
+    },
+    {
+      "name": "Text Link",
+      "kind": "custom",
+      "refersTo": "",
+      "description": "Stone 900 text with a thin stone 400 underline that darkens on hover.",
+      "html": "<a class=\"ds-link\" href=\"#\">Back to the group</a>",
+      "css": ".ds-link { color: oklch(21.6% 0.006 56.043); font-family: \"Source Sans 3\", ui-sans-serif, system-ui, sans-serif; font-weight: 400; font-size: 17px; text-decoration: underline; text-decoration-color: oklch(70.9% 0.01 56.259); text-decoration-thickness: 1px; text-underline-offset: 4px; } .ds-link:hover { text-decoration-color: oklch(21.6% 0.006 56.043); } .ds-link:focus-visible { outline: 2px solid oklch(55.3% 0.195 38.402); outline-offset: 3px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Corner Shop",
+    "overview": "A group's page is a painted neighbourhood shop sign over a plain white shop floor. The sign is a full-width band of orange carrying the group's name in a soft, heavy serif. Below it, people talk: every author's name is set in that same serif, large and in orange, so the page reads as named people speaking rather than as a feed of items. Everything else is one quiet sans at one weight, on white, with as little interface as the task allows.\n\nThe system has two display moves and only two: **the sign** and **the names** (with the day headings, which share the names' serif and sit between them as the largest type below the sign). Everything that is not a person, a day, or the group is interface, and interface stays small, grey, and out of the way. There are no cards, panels, boxes, or shadows; structure comes from type size, a shared left edge, and white space. Nothing moves on its own.\n\nThe page is self-contained: both fonts, the stylesheet, the scripts, and the icon are served by the app itself, and no page makes a request to any third party.",
+    "keyCharacteristics": [
+      "A full-width orange sign at the top of every group page, carrying the group's name at up to 96px in near-black.",
+      "Names, day headings, and the group's name in Fraunces (softness at full, leaning letters off, set heavy); everything else in Source Sans 3 Regular.",
+      "Author names in orange 700, hung in a 200px left margin column on wide screens.",
+      "White page, near-black text, stone greys for secondary text and lines. No cards, boxes, or shadows.",
+      "Pill-shaped field and buttons; one orange button per page.",
+      "Orange 500 appears below the sign only on the primary action and the \"new\" dot."
+    ],
+    "rules": [
+      {
+        "name": "The One Meaning Rule",
+        "body": "Orange stands for the group, a person, or something new from one. Below the sign, Shop-Sign Orange fills exactly two things: the primary action and the \"new\" dot. The only other orange is Lettering Orange, for names, the \"new\" word, and keyboard focus.",
+        "section": "colors"
+      },
+      {
+        "name": "The Orange 700 Text Rule",
+        "body": "Orange text is primary 700 or darker, always. Primary 500 is for fills and marks only.",
+        "section": "colors"
+      },
+      {
+        "name": "The Name-It-Primary Rule",
+        "body": "Pages name the accent as `primary`, never by its hue, so a configured accent changes every page at once.",
+        "section": "colors"
+      },
+      {
+        "name": "The Not-Only-Colour Rule",
+        "body": "State is carried in form as well as colour: \"new\" is a dot and a word; a refusal is an icon and a sentence; a disabled button is dimmed and loses its pointer.",
+        "section": "colors"
+      },
+      {
+        "name": "The Names Are Display Rule",
+        "body": "Every person's name is set in Fraunces in Lettering Orange, wherever it appears in the timeline. A name is never body text, and never accompanied by an avatar.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Weight Rule",
+        "body": "The sans has one weight, 400. Emphasis comes from the serif, from size, or from colour, never from bold sans. Only the regular weight is shipped.",
+        "section": "typography"
+      },
+      {
+        "name": "The Heavier When Smaller Rule",
+        "body": "Fraunces gets slightly heavier as it gets smaller (620 at 64-96px, 640 at 18-36px, 680 at 20px for comment names), so the names keep their painted weight at every size.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Left Edge Rule",
+        "body": "The group's name, the day headings, and the margin names start on the same vertical line. A new surface that has a sign keeps it.",
+        "section": "layout"
+      },
+      {
+        "name": "The Reserved Margin Rule",
+        "body": "The right side of a wide screen belongs to upcoming events. Leave it empty until they ship.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat Shop Floor Rule",
+        "body": "Nothing on the page casts a shadow or sits in a box. A post is a name and its text, never a card.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do name the accent as `primary-*`, never `orange-*`.",
+      "Do set every person's name in Fraunces in primary 700, at Title size for authors of posts and Title small inside threads.",
+      "Do keep primary 500 to the sign, the one primary action on a surface, and the \"new\" dot.",
+      "Do put orange text in primary 700 or darker.",
+      "Do carry state in form as well as colour: a dot and a word, an icon and a sentence.",
+      "Do keep the sign's lettering, headings, and margin names on one left edge, and keep the reading column at most 608px.",
+      "Do use pills for every button and field: one filled primary, everything else outlined in stone 500.",
+      "Do serve every font, script, stylesheet, and image from the app itself.",
+      "Do keep openings to a short fade (180ms), wrapped in `motion-safe`, and let nothing move on its own.",
+      "Do leave the right side of a wide screen empty until upcoming events fill it."
+    ],
+    "donts": [
+      "Don't put posts, comments, or anything else in cards, panels, boxes, or shadows.",
+      "Don't add a second filled orange button to a surface, or use primary 500 for text on white.",
+      "Don't add avatars, counters beside names, badges, or a grey feed background.",
+      "Don't use bold or uppercase letter-spaced sans for emphasis or labels; the sans has one weight.",
+      "Don't introduce a colour outside Tailwind's default orange (as `primary`) and stone scales, including red for errors.",
+      "Don't load anything from a third party: no font host, no CDN, no analytics, no embedded widget.",
+      "Don't show a control for something that is not built yet.",
+      "Don't make the sign sticky; it scrolls away with the page."
+    ]
+  }
+}
