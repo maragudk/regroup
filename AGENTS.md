@@ -48,3 +48,7 @@ Markus, 2026-11-26. The site is separate from this repository, and the software 
 ### The first real group is for Markus's shared office space
 
 Markus on 2026-11-26: "I intend to make one for my shared office space, that's it." Use that group as the test case when deciding what to build first.
+
+### Conversation exports go straight to `main`
+
+Commit an export to `docs/conversations/` on `main` and push it, with no branch and no pull request. Markus on 2026-11-26: "Why does it go into a branch? Just push it to main".
