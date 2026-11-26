@@ -99,15 +99,22 @@ func TestDatastarVersion(t *testing.T) {
 // app's own, each with its licence beside it, and the stylesheet and the pages name nothing else.
 func TestFonts(t *testing.T) {
 	fonts := map[string]string{
-		"Fraunces.woff2":            "Fraunces-OFL.txt",
+		"Fraunces.ttf":              "Fraunces-OFL.txt",
 		"SourceSans3-Regular.woff2": "SourceSans3-LICENSE.md",
 	}
 
+	// types of the font files, by their extension: the media type a page preloads them as, and the first
+	// bytes of a file of that kind.
+	types := map[string]struct{ media, magic string }{
+		".ttf":   {media: "font/ttf", magic: "\x00\x01\x00\x00"},
+		".woff2": {media: "font/woff2", magic: "wOF2"},
+	}
+
 	t.Run("each font and its licence is the file that was fetched, byte for byte", func(t *testing.T) {
-		// Source Sans 3 and both licences are the files from the fonts' own repositories. Fraunces is
-		// its variable TrueType font from there, in a WOFF2 container. See the fonts target in the Makefile.
+		// Each is the file from the font's own repository, unchanged: for Fraunces, its variable TrueType
+		// font with all four axes. See the fonts target in the Makefile.
 		for name, sum := range map[string]string{
-			"Fraunces.woff2":            "4454fbcc79aa12f2e6ce407cbabdc64896afed32d494d4671602a436e84e7d44",
+			"Fraunces.ttf":              "0776a870a0856b296e11639505ac0cf9be5e7800bb1849dfa21a1bd182455fc0",
 			"Fraunces-OFL.txt":          "bdf4c22802eaf804f998195871c6b8938aac2ac14b2d78a8bd66a6f1eced833b",
 			"SourceSans3-Regular.woff2": "53492fb3a0def77354f166a55d09b63a10855e91c206c7620a81cf56e97f8ec3",
 			"SourceSans3-LICENSE.md":    "56af9b9c6715597e458284a474dc118a50a4150e9d547c70f7b4a33c3e6a9328",
@@ -118,11 +125,13 @@ func TestFonts(t *testing.T) {
 		}
 	})
 
-	t.Run("each font is a WOFF2 file with the text of its SIL Open Font License beside it", func(t *testing.T) {
+	t.Run("each font is a TrueType or WOFF2 file, as its name says, with the text of its SIL Open Font License beside it", func(t *testing.T) {
 		for font, licence := range fonts {
 			data, err := os.ReadFile(filepath.Join("../public/styles/fonts", font))
 			is.NotError(t, err)
-			is.Equal(t, "wOF2", string(data[:4]), font)
+			typ, ok := types[filepath.Ext(font)]
+			is.True(t, ok, font)
+			is.Equal(t, typ.magic, string(data[:4]), font)
 
 			text, err := os.ReadFile(filepath.Join("../public/styles/fonts", licence))
 			is.NotError(t, err)
@@ -154,13 +163,14 @@ func TestFonts(t *testing.T) {
 	t.Run("the pages preload exactly these fonts, from the path the stylesheet loads them from", func(t *testing.T) {
 		page := render(t, html.Page(html.PageProps{Title: "Test"}))
 
-		preloads := regexp.MustCompile(`<link rel="preload" href="([^"]*)" as="font" type="font/woff2" crossorigin="anonymous">`).FindAllStringSubmatch(page, -1)
+		preloads := regexp.MustCompile(`<link rel="preload" href="([^"]*)" as="font" type="([^"]*)" crossorigin="anonymous">`).FindAllStringSubmatch(page, -1)
 		is.Equal(t, len(fonts), len(preloads))
 		for _, preload := range preloads {
 			dir, font := filepath.Split(preload[1])
 			is.Equal(t, "/styles/fonts/", dir)
 			_, ok := fonts[font]
 			is.True(t, ok, font)
+			is.Equal(t, types[filepath.Ext(font)].media, preload[2], font)
 		}
 	})
 }
@@ -176,7 +186,7 @@ func TestStylesheet(t *testing.T) {
 		urls := regexp.MustCompile(`url\(([^)]*)\)`).FindAllStringSubmatch(string(source), -1)
 		is.Equal(t, 2, len(urls))
 		for _, u := range urls {
-			is.True(t, regexp.MustCompile(`^"fonts/[A-Za-z0-9-]+\.woff2"$`).MatchString(u[1]), u[1])
+			is.True(t, regexp.MustCompile(`^"fonts/[A-Za-z0-9-]+\.(?:ttf|woff2)"$`).MatchString(u[1]), u[1])
 
 			_, err := os.Stat(filepath.Join("../public/styles", strings.Trim(u[1], `"`)))
 			is.NotError(t, err)

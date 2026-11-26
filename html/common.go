@@ -55,7 +55,7 @@ func document(props PageProps, body ...Node) Node {
 		Head: Group{
 			// The group is private, so no page is for a search engine.
 			Meta(Name("robots"), Content("noindex")),
-			Link(Rel("preload"), Href("/styles/fonts/Fraunces.woff2"), As("font"), Type("font/woff2"), CrossOrigin("anonymous")),
+			Link(Rel("preload"), Href("/styles/fonts/Fraunces.ttf"), As("font"), Type("font/ttf"), CrossOrigin("anonymous")),
 			Link(Rel("preload"), Href("/styles/fonts/SourceSans3-Regular.woff2"), As("font"), Type("font/woff2"), CrossOrigin("anonymous")),
 			Link(Rel("stylesheet"), Href(appCSSPath)),
 			Script(Type("module"), Src(datastarJSPath), Defer()),
