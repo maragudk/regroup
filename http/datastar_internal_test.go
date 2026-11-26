@@ -111,6 +111,18 @@ func TestEncodePatches(t *testing.T) {
 		is.Equal(t, "<p>a\nevent: datastar-patch-elements\ndata: elements &lt;script&gt;alert(1)&lt;/script&gt;\n\nb</p>", patches[0].Elements)
 	})
 
+	t.Run("refuses a selector or a mode with a line break in it, which would start a line of its own", func(t *testing.T) {
+		for _, p := range []patch{
+			{selector: "#a\ndata: mode inner", elements: P()},
+			{selector: "#a\revent: x", elements: P()},
+			{selector: "#a", mode: "append\ndata: selector body", elements: P()},
+			{mode: "append\r", elements: P()},
+		} {
+			_, err := encodePatches([]patch{p})
+			is.True(t, err != nil, "expected an error for "+p.selector+p.mode)
+		}
+	})
+
 	t.Run("any text in a patch comes out as that text in one element of one event, whatever it holds", func(t *testing.T) {
 		hegel.Test(t, func(ht *hegel.T) {
 			text := hegel.Draw(ht, hostileText())

@@ -34,16 +34,12 @@ How we know regroup does what it should, given that Markus does not read the cod
 - The preview instance. Its made-up office group and its one way to sign in as anyone are built behind the `preview` build tag (`make preview`).
 - The nightly workflow.
 - A pinned bombadil, its checks, and a CI job that starts the app and keeps the trace.
-- What bombadil needs from the app: a seeded database with one person per role, stable markers on posts, comments, and moderation notes, and a visible error when a Datastar request fails.
+- What bombadil still needs from the app: a seeded database with one person per role, and stable markers on moderation notes. Posts, comments, days, and the "new" mark have stable markers, and a failed Datastar request shows the message in `#request-failed`. They are listed in step 3 of `docs/diary/2026-11-26-first-group-page.md`.
 
 ## Open
 
 - What else has to be true before Markus says "production", beyond mutation testing, reviews by other models, and a security review.
 - How sign-in emails reach Markus on the preview.
-- Checks for the promises in the core values, such as that no page asks a third party for anything.
+- Checks for the other promises in the core values. That no page asks another host for anything is checked by tests, and for the built stylesheet by the Docker build.
 - How well bombadil explores a real timeline. The trial only had a placeholder page.
 - How well hegel shrinks long stateful failures, and whether a failure can be replayed from its printed code.
-
-## Found while evaluating tools
-
-- With the settings in `.env.example`, the content security policy blocks Datastar, so nothing interactive can run. Bombadil reported it on its first run, and no Go test catches it. See `docs/research/bombadil.md`. It has to be fixed before the first interactive page.

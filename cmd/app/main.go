@@ -139,9 +139,9 @@ func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
 	service.Setup(svc, bucket, db, sender, time.Now, group)
 
 	routerInjector := http.InjectHTTPRouter(log, svc, http.InjectHTTPRouterOptions{
-		Group:       group,
-		Now:         time.Now,
-		PreviewLink: previewLink,
+		Group: group,
+		Now:   time.Now,
+		Extra: previewLink,
 	})
 	if setupPreview != nil {
 		previewInjector, err := setupPreview(ctx, log, db, time.Now, group)

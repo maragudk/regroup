@@ -52,7 +52,7 @@ func TestRoutes(t *testing.T) {
 		sm := scs.New()
 		r := gluehttp.NewRouter(gluehttp.NewRouterOpts{SM: sm})
 		r.Use(sm.LoadAndSave, gluehttp.Authenticate(log, sm, db))
-		apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{Group: group, Now: now, PreviewLink: preview.PeopleLink})(r)
+		apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{Group: group, Now: now, Extra: preview.PeopleLink})(r)
 		preview.Routes(r, log, db)
 		server := httptest.NewServer(r.Mux)
 		t.Cleanup(server.Close)

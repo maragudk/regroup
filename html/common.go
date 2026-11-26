@@ -30,14 +30,11 @@ func Page(props PageProps, body ...Node) Node {
 	)
 }
 
-// wrap is the column every page keeps its content in, so that everything starts on one left edge.
-const wrap = "mx-auto w-full max-w-[1440px] px-5 sm:px-8 lg:px-[72px]"
-
 // document with the given body directly in it.
 //
 // Every stylesheet, script, and font is loaded from the app's own origin. If the request has a content
-// security policy nonce from [httph.NonceFromContext], Datastar is told to use it, so that it needs no
-// 'unsafe-eval' in the policy.
+// security policy nonce from [httph.NonceFromContext], Datastar is given it, and runs the expressions on
+// the page with it.
 func document(props PageProps, body ...Node) Node {
 	hashOnce.Do(func() {
 		appCSSPath = getHashedPath("public/styles/app.css")

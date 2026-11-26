@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strings"
+	"time"
 
 	. "maragu.dev/gomponents"
 	"maragu.dev/httph"
@@ -23,7 +26,7 @@ type timelineService interface {
 	GetTimeline(ctx context.Context, actor model.UserID, cursor string, limit int) (model.Timeline, error)
 }
 
-// Timeline registers the group page and what happens on it:
+// timeline registers the group page and what happens on it:
 //
 //   - GET / is the group page, and counts as the person's look at the timeline. Someone who is not signed
 //     in gets a page that says only that the group is private.
@@ -32,20 +35,27 @@ type timelineService interface {
 //   - POST /comments/open gets the comments of a post, and records that the person opened them.
 //   - POST /comments creates a comment on a post.
 //
-// All but the first answer Datastar with patches to the page the request came from. Reading goes by
-// POST too, with the post or the cursor in the body, so that what someone read is not in a URL, and so
-// in no trace or log. A request without Datastar, from a browser that does not run the page's script,
-// is answered with a redirect to the group page or a page with a message.
+// All but the first answer Datastar with patches to the page the request came from, and none of them
+// counts as a look. Reading goes by POST too, with the post or the cursor in the body, so that what
+// someone read is not in a URL.
+//
+// A request without Datastar comes from a browser that does not run the page's script. For that, a post
+// or a comment is still made, and answered with a redirect to the group page, or with a page that says
+// why not. Nothing is read for it, since there is no page to show it in place on.
 //
 // Someone who is not signed in, or not active, gets nothing of the group from any of them.
-func Timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPRouterOptions) {
+func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPRouterOptions) {
 	group := opts.Group
 
+	now := func() time.Time {
+		return opts.Now().In(group.TimeZone)
+	}
+
 	extra := func(signedIn bool) Node {
-		if opts.PreviewLink == nil {
+		if opts.Extra == nil {
 			return nil
 		}
-		return opts.PreviewLink(signedIn)
+		return opts.Extra(signedIn)
 	}
 
 	// private is the answer to someone who is not signed in.
@@ -58,14 +68,13 @@ func Timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 	}
 
 	// failed is the answer when the business logic returned an error that is not about what was written.
-	failed := func(props html.PageProps, err error) (Node, error) {
+	// Someone who stopped being active since the request began is not signed in, and gets the given code.
+	failed := func(props html.PageProps, err error, signedOutCode int) (Node, error) {
 		switch {
 		case errors.Is(err, model.ErrorUserInactive), errors.Is(err, model.ErrorUserNotFound):
-			return private(props, http.StatusUnauthorized)
+			return private(props, signedOutCode)
 		case errors.Is(err, model.ErrorPostNotFound):
 			return html.NotFoundPage(props), httph.HTTPError{Code: http.StatusNotFound}
-		case errors.Is(err, model.ErrorCursorInvalid):
-			return badRequest(props)
 		default:
 			log.ErrorContext(props.Ctx, "Error on the timeline", "error", err)
 			return html.ErrorPage(props), err
@@ -80,20 +89,19 @@ func Timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 
 		members, err := svc.GetMembers(props.Ctx, user.ID)
 		if err != nil {
-			if errors.Is(err, model.ErrorUserInactive) || errors.Is(err, model.ErrorUserNotFound) {
-				return private(props, http.StatusOK)
-			}
-			return failed(props, err)
+			return failed(props, err, http.StatusOK)
 		}
 
 		// The look at the timeline comes last, so that nothing after it can fail and leave the person
 		// with the marks used up and no page to see them on.
 		timeline, err := svc.GetTimeline(props.Ctx, user.ID, "", 0)
 		if err != nil {
-			if errors.Is(err, model.ErrorUserInactive) || errors.Is(err, model.ErrorUserNotFound) {
-				return private(props, http.StatusOK)
-			}
-			return failed(props, err)
+			return failed(props, err, http.StatusOK)
+		}
+
+		var days []model.Date
+		for _, day := range timeline.Days {
+			days = append(days, day.Date)
 		}
 
 		return html.GroupPage(html.GroupPageProps{
@@ -101,8 +109,10 @@ func Timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			GroupName: group.Name,
 			Members:   members,
 			UserName:  user.Name,
-			Now:       opts.Now().In(group.TimeZone),
+			Now:       now(),
 			Timeline:  timeline,
+			Composer:  html.ComposerProps{Days: firstDays(days)},
+			Earlier:   html.EarlierPostsProps{Next: timeline.Next, Days: lastDays(days)},
 			Extra:     extra(true),
 		}), nil
 	})
@@ -113,31 +123,26 @@ func Timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			return private(props, http.StatusUnauthorized)
 		}
 
-		tooLarge, err := parseForm(props)
-		if err != nil {
-			return badRequest(props)
+		if page, err := parseForm(props); err != nil {
+			return page, err
 		}
 		body := props.R.PostFormValue("body")
-		newest := props.R.PostFormValue("newest")
+		days := parseDays(props.R.PostFormValue("days"))
 
-		var post model.Post
-		err = model.ErrorBodyTooLong
-		if !tooLarge {
-			post, err = svc.CreatePost(props.Ctx, user.ID, body)
-		}
+		post, err := svc.CreatePost(props.Ctx, user.ID, body)
 		if message := refusal(err, "post", model.PostBodyMaxLength); message != "" {
 			if !isDatastar(props.R) {
 				return refused(props, "That was not posted", message)
 			}
 			return nil, writePatches(props.W, patch{elements: html.Composer(html.ComposerProps{
-				Body:    body,
+				Body:    echo(body),
 				Message: message,
-				Newest:  newest,
-				Fresh:   props.R.PostFormValue("field"),
+				Days:    days,
+				Fresh:   echo(props.R.PostFormValue("field")),
 			})})
 		}
 		if err != nil {
-			return failed(props, err)
+			return failed(props, err, http.StatusUnauthorized)
 		}
 
 		if !isDatastar(props.R) {
@@ -145,24 +150,37 @@ func Timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			return nil, nil
 		}
 
-		now := opts.Now().In(group.TimeZone)
+		now := now()
 		day := model.GroupByDay([]model.TimelinePost{{Post: post, AuthorName: user.Name}}, group.TimeZone, now)[0]
 
-		// The post goes under the heading of its day if the person's page has one, which their page told
-		// us with the post. Otherwise it brings its day's heading along.
-		timeline := patch{selector: "#" + html.TimelineID, mode: "prepend", elements: html.TimelineDay(day, now)}
-		switch newest {
-		case day.Date.String():
-			timeline = patch{selector: "#" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts)}
-		case "":
-			// Their timeline was empty, and said so. The post takes the place of that.
-			timeline.mode = "inner"
+		// The page said which days it has a heading for at its top. The post goes under the heading of
+		// its day if that is one of them.
+		if slices.Contains(days, day.Date) {
+			return nil, writePatches(props.W,
+				patch{elements: html.Composer(html.ComposerProps{Days: days, Fresh: post.ID.String()})},
+				patch{selector: "#" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts)},
+			)
 		}
 
-		return nil, writePatches(props.W,
-			patch{elements: html.Composer(html.ComposerProps{Newest: day.Date.String(), Fresh: post.ID.String()})},
-			timeline,
-		)
+		// Otherwise it brings its day's heading along, to the top of the timeline. If the timeline was
+		// empty, and said so, the day takes the place of that.
+		patches := []patch{
+			{elements: html.Composer(html.ComposerProps{Days: firstDays(append([]model.Date{day.Date}, days...)), Fresh: post.ID.String()})},
+			{selector: "#" + html.TimelineID, mode: "prepend", elements: html.TimelineDay(day, now)},
+		}
+		if len(days) == 0 {
+			patches[1].mode = "inner"
+			return nil, writePatches(props.W, patches...)
+		}
+
+		// A new day at the top means the page was made on an earlier day, so "Today" and "Yesterday" over
+		// the days below it are no longer true. Their headings are set right.
+		today := model.DateOf(now)
+		patches = append(patches, patch{elements: Map(days, func(d model.Date) Node {
+			return html.DayHeading(model.TimelineDay{Date: d, Today: d == today, Yesterday: d == today.AddDays(-1)}, now)
+		})})
+
+		return nil, writePatches(props.W, patches...)
 	})
 
 	r.Post("/posts/earlier", func(props html.PageProps) (Node, error) {
@@ -171,8 +189,8 @@ func Timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			return private(props, http.StatusUnauthorized)
 		}
 
-		if tooLarge, err := parseForm(props); err != nil || tooLarge {
-			return badRequest(props)
+		if page, err := parseForm(props); err != nil {
+			return page, err
 		}
 
 		// An empty cursor would be the first page, and getting that counts as a look at the timeline.
@@ -182,58 +200,58 @@ func Timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		}
 
 		if !isDatastar(props.R) {
-			http.Redirect(props.W, props.R, "/", http.StatusSeeOther)
-			return nil, nil
+			return needsScript(props)
 		}
 
 		timeline, err := svc.GetTimeline(props.Ctx, user.ID, after.String(), 0)
 		if err != nil {
-			return failed(props, err)
+			return failed(props, err, http.StatusUnauthorized)
 		}
 
-		now := opts.Now().In(group.TimeZone)
-		var patches []patch
+		// The page has a heading for the day its last post is from, which is where the cursor points,
+		// and for the days it said it has at its end. Posts from those days go under the headings that
+		// are there, and the other days bring their own.
+		known := parseDays(props.R.PostFormValue("days"))
+		if last := model.DateOf(after.Created.T.In(group.TimeZone)); !slices.Contains(known, last) {
+			known = append(known, last)
+		}
 
-		// The page before ended on the day of its last post, which is where the cursor points. If this
-		// page goes on with the same day, its posts go under the heading that is already there.
-		last := model.DateOf(after.Created.T.In(group.TimeZone))
+		now := now()
+		var patches []patch
 		var days []model.TimelineDay
 		for _, day := range timeline.Days {
-			if day.Date == last {
+			if slices.Contains(known, day.Date) {
 				patches = append(patches, patch{selector: "#" + html.DayPostsID(day.Date), mode: "append", elements: html.TimelinePosts(day.Posts)})
 				continue
 			}
 			days = append(days, day)
+			known = append(known, day.Date)
 		}
 		if len(days) > 0 {
 			patches = append(patches, patch{selector: "#" + html.TimelineID, mode: "append", elements: Map(days, func(day model.TimelineDay) Node {
 				return html.TimelineDay(day, now)
 			})})
 		}
-		patches = append(patches, patch{elements: html.EarlierPosts(timeline.Next)})
+		patches = append(patches, patch{elements: html.EarlierPosts(html.EarlierPostsProps{Next: timeline.Next, Days: lastDays(known)})})
 
 		return nil, writePatches(props.W, patches...)
 	})
 
-	// comments of the given post as patches: the list with its form, and the post's count of comments,
-	// which no longer has anything new in it for the person.
-	comments := func(props html.PageProps, user *model.User, postID model.PostID, form html.CommentFormProps) (Node, error) {
-		comments, err := svc.GetComments(props.Ctx, user.ID, postID)
+	// comments of the given post as patches: the list, the post's count of comments, which no longer has
+	// anything new in it for the person, and the given other elements.
+	comments := func(props html.PageProps, user *model.User, postID model.PostID, others ...Node) (Node, error) {
+		list, err := svc.GetComments(props.Ctx, user.ID, postID)
 		if err != nil {
-			return failed(props, err)
+			return failed(props, err, http.StatusUnauthorized)
 		}
-		for i := range comments {
-			comments[i].Created.T = comments[i].Created.T.In(group.TimeZone)
+		for i := range list {
+			list[i].Created.T = list[i].Created.T.In(group.TimeZone)
 		}
 
 		return nil, writePatches(props.W, patch{elements: Group{
-			html.CommentsSummary(postID, len(comments), 0),
-			html.Comments(html.CommentsProps{
-				PostID:   postID,
-				Comments: comments,
-				Now:      opts.Now().In(group.TimeZone),
-				Form:     form,
-			}),
+			html.CommentsSummary(postID, len(list), 0),
+			html.Comments(html.CommentsProps{PostID: postID, Comments: list, Now: now()}),
+			Group(others),
 		}})
 	}
 
@@ -243,16 +261,17 @@ func Timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			return private(props, http.StatusUnauthorized)
 		}
 
-		if tooLarge, err := parseForm(props); err != nil || tooLarge {
-			return badRequest(props)
+		if page, err := parseForm(props); err != nil {
+			return page, err
 		}
 
 		if !isDatastar(props.R) {
-			http.Redirect(props.W, props.R, "/", http.StatusSeeOther)
-			return nil, nil
+			return needsScript(props)
 		}
 
-		return comments(props, user, model.PostID(props.R.PostFormValue("post")), html.CommentFormProps{})
+		// The form to add a comment is not part of the answer, so that opening the comments again
+		// leaves what someone has begun to write in it alone.
+		return comments(props, user, model.PostID(props.R.PostFormValue("post")))
 	})
 
 	r.Post("/comments", func(props html.PageProps) (Node, error) {
@@ -261,31 +280,26 @@ func Timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			return private(props, http.StatusUnauthorized)
 		}
 
-		tooLarge, err := parseForm(props)
-		if err != nil {
-			return badRequest(props)
+		if page, err := parseForm(props); err != nil {
+			return page, err
 		}
 		postID := model.PostID(props.R.PostFormValue("post"))
 		body := props.R.PostFormValue("body")
 
-		var comment model.Comment
-		err = model.ErrorBodyTooLong
-		if !tooLarge {
-			comment, err = svc.CreateComment(props.Ctx, user.ID, postID, body)
-		}
+		comment, err := svc.CreateComment(props.Ctx, user.ID, postID, body)
 		if message := refusal(err, "comment", model.CommentBodyMaxLength); message != "" {
 			if !isDatastar(props.R) {
 				return refused(props, "That comment was not added", message)
 			}
 			return nil, writePatches(props.W, patch{elements: html.CommentForm(html.CommentFormProps{
-				PostID:  postID,
-				Body:    body,
+				PostID:  model.PostID(echo(postID.String())),
+				Body:    echo(body),
 				Message: message,
-				Fresh:   props.R.PostFormValue("field"),
+				Fresh:   echo(props.R.PostFormValue("field")),
 			})})
 		}
 		if err != nil {
-			return failed(props, err)
+			return failed(props, err, http.StatusUnauthorized)
 		}
 
 		if !isDatastar(props.R) {
@@ -293,23 +307,66 @@ func Timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			return nil, nil
 		}
 
-		return comments(props, user, postID, html.CommentFormProps{Fresh: comment.ID.String()})
+		return comments(props, user, postID, html.CommentForm(html.CommentFormProps{PostID: postID, Fresh: comment.ID.String()}))
 	})
 }
 
-// parseForm of the request, reading no more of it than the longest post could take up. It reports
-// whether the request was larger than that.
-func parseForm(props html.PageProps) (tooLarge bool, err error) {
-	// A character is at most four bytes, and each byte at most three characters in a form.
-	props.R.Body = http.MaxBytesReader(props.W, props.R.Body, 12*model.PostBodyMaxLength+4096)
-	if err := props.R.ParseForm(); err != nil {
-		var tooLargeErr *http.MaxBytesError
-		if errors.As(err, &tooLargeErr) {
-			return true, nil
-		}
-		return false, err
+// parseForm of the request, which may be no larger than a megabyte. That is many times the longest
+// post, so that a post that is too long can still be read, and refused as that. If the form cannot be
+// read, parseForm returns the answer to give.
+func parseForm(props html.PageProps) (Node, error) {
+	props.R.Body = http.MaxBytesReader(props.W, props.R.Body, 1<<20)
+
+	err := props.R.ParseForm()
+	if err == nil {
+		return nil, nil
 	}
-	return false, nil
+
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		page := html.MessagePage(html.MessagePageProps{PageProps: props, Heading: "That is too long", Message: "What was sent is far longer than a post can be."})
+		return page, httph.HTTPError{Code: http.StatusRequestEntityTooLarge}
+	}
+	return badRequest(props)
+}
+
+// parseDays that a page said it has headings for, in the form [html.ComposerProps.Days] are sent in.
+// What is not a date is left out, and so is anything after the first few, since a page only names a few.
+func parseDays(s string) []model.Date {
+	var days []model.Date
+	for part := range strings.SplitSeq(s, ",") {
+		if len(days) == daysSent {
+			break
+		}
+		t, err := time.Parse(time.DateOnly, part)
+		if err != nil {
+			continue
+		}
+		if d := model.DateOf(t); !slices.Contains(days, d) {
+			days = append(days, d)
+		}
+	}
+	return days
+}
+
+// daysSent is how many days a form names. Three is enough for the days whose headings can read "Today"
+// or "Yesterday", and for the days around a change of the clocks that a later post can still belong to.
+const daysSent = 3
+
+// firstDays of the given days, for a form to name.
+func firstDays(days []model.Date) []model.Date {
+	return days[:min(len(days), daysSent)]
+}
+
+// lastDays of the given days, for a form to name.
+func lastDays(days []model.Date) []model.Date {
+	return days[max(len(days)-daysSent, 0):]
+}
+
+// echo of what a request sent, for putting it back on the page: the same text, with whatever in it is
+// not text replaced, so that the answer is.
+func echo(s string) string {
+	return strings.ToValidUTF8(s, "\ufffd")
 }
 
 // refusal in plain words, for a body that was refused as the given kind of thing with the given
@@ -329,8 +386,15 @@ func refusal(err error, kind string, maxLength int) string {
 
 // refused is the answer to a browser that does not run the page's script, when what it sent was refused.
 func refused(props html.PageProps, heading, message string) (Node, error) {
-	page := html.MessagePage(html.MessagePageProps{PageProps: props, Heading: heading, Message: message + " Go back to try again."})
+	page := html.MessagePage(html.MessagePageProps{PageProps: props, Heading: heading, Message: message})
 	return page, httph.HTTPError{Code: http.StatusUnprocessableEntity}
+}
+
+// needsScript is the answer to a browser that does not run the page's script, when it asks for something
+// that can only be shown in place.
+func needsScript(props html.PageProps) (Node, error) {
+	page := html.MessagePage(html.MessagePageProps{PageProps: props, Heading: "That needs JavaScript", Message: "Comments and earlier posts open in place on the group page, which takes JavaScript."})
+	return page, httph.HTTPError{Code: http.StatusBadRequest}
 }
 
 // badRequest is the answer to a request that the page could not have sent.

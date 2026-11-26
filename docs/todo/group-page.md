@@ -28,6 +28,7 @@ The page a member opens: the group's timeline. Agreed with Markus on 2026-11-26.
 - The sign scrolls away with the page. On a phone it is smaller, and each name sits above its post, not in a margin.
 - Posts and comments are plain text with line breaks kept. There is no formatting and no editing yet.
 - Limits and details chosen by the first builder are in step 2 of `docs/diary/2026-11-26-first-group-page.md`: a post is at most 10,000 characters and a comment 2,000, a page holds 20 posts, and "yesterday" is the previous calendar date in the group's time zone.
+- Details chosen by the page builder are in step 3 of the same diary: the wording on the page, what the sign carries, how comments and earlier posts are asked for, and what a browser without JavaScript gets.
 - Opening or reloading the timeline counts as a look, so a reload clears the marks on posts. Posting, commenting, and loading earlier posts happen in place and do not count as a look.
 - Until sign-in is built, a visitor who is not signed in sees only "This group is private." The people build decides what the sign-in page shows, including whether it names the group.
 - The work is split across builders in this order: the timeline's data and rules; the page itself; the generated-history and fuzz tests; bombadil with its CI job and the nightly run; then the design review and the preview.

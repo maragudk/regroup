@@ -2,6 +2,8 @@ package html_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -101,6 +103,21 @@ func TestFonts(t *testing.T) {
 		"SourceSans3-Regular.woff2": "SourceSans3-LICENSE.md",
 	}
 
+	t.Run("each font and its licence is the file that was fetched, byte for byte", func(t *testing.T) {
+		// Source Sans 3 and both licences are the files from the fonts' own repositories. Fraunces is
+		// its variable TrueType font from there, in a WOFF2 container. See the fonts target in the Makefile.
+		for name, sum := range map[string]string{
+			"Fraunces.woff2":            "4454fbcc79aa12f2e6ce407cbabdc64896afed32d494d4671602a436e84e7d44",
+			"Fraunces-OFL.txt":          "bdf4c22802eaf804f998195871c6b8938aac2ac14b2d78a8bd66a6f1eced833b",
+			"SourceSans3-Regular.woff2": "53492fb3a0def77354f166a55d09b63a10855e91c206c7620a81cf56e97f8ec3",
+			"SourceSans3-LICENSE.md":    "56af9b9c6715597e458284a474dc118a50a4150e9d547c70f7b4a33c3e6a9328",
+		} {
+			data, err := os.ReadFile(filepath.Join("../public/styles/fonts", name))
+			is.NotError(t, err)
+			is.Equal(t, sum, fmt.Sprintf("%x", sha256.Sum256(data)), name)
+		}
+	})
+
 	t.Run("each font is a WOFF2 file with the text of its SIL Open Font License beside it", func(t *testing.T) {
 		for font, licence := range fonts {
 			data, err := os.ReadFile(filepath.Join("../public/styles/fonts", font))
@@ -169,6 +186,32 @@ func TestStylesheet(t *testing.T) {
 		is.EqualSlice(t, []string{`@import "tailwindcss";`}, imports)
 
 		is.True(t, !strings.Contains(string(source), "//"), "the source names a scheme or a host")
+	})
+
+	t.Run("the pages name the accent colour only as primary, so that it can be changed in one place", func(t *testing.T) {
+		source, err := os.ReadFile("../tailwind.css")
+		is.NotError(t, err)
+		for _, shade := range []string{"50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"} {
+			is.True(t, strings.Contains(string(source), "--color-primary-"+shade+": var(--color-orange-"+shade+");"), shade)
+		}
+
+		colours := regexp.MustCompile(`\b(?:red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|slate|gray|zinc|neutral)-\d{2,3}\b`)
+		var files int
+		for _, dir := range []string{"../html", "../preview"} {
+			paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
+			is.NotError(t, err)
+			for _, path := range paths {
+				if strings.HasSuffix(path, "_test.go") {
+					continue
+				}
+				files++
+
+				source, err := os.ReadFile(path)
+				is.NotError(t, err)
+				is.EqualSlice(t, nil, colours.FindAllString(string(source), -1), path)
+			}
+		}
+		is.True(t, files > 3, "expected to have read the Go files")
 	})
 
 	t.Run("no class in the Go files that Tailwind reads can put a URL or an import into it", func(t *testing.T) {

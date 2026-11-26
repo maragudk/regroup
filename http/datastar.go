@@ -2,6 +2,7 @@ package http
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -44,10 +45,15 @@ func writePatches(w http.ResponseWriter, patches ...patch) error {
 // A line of a server-sent event ends at a line feed, a carriage return, or both. So that nothing in the
 // elements can end a line early and start a field or an event of its own, every carriage return in them
 // becomes a line feed first, which is what a browser reading HTML does with one anyway. Each line of the
-// elements is then sent as a data line of its own.
+// elements is then sent as a data line of its own. A selector or a mode with a line break in it is an
+// error.
 func encodePatches(patches []patch) ([]byte, error) {
 	var b bytes.Buffer
 	for _, p := range patches {
+		if strings.ContainsAny(p.selector+p.mode, "\r\n") {
+			return nil, errors.New("line break in the selector or the mode of a patch")
+		}
+
 		var elements strings.Builder
 		if err := p.elements.Render(&elements); err != nil {
 			return nil, err

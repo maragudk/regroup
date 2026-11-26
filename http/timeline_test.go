@@ -2,18 +2,25 @@ package http_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/alexedwards/scs/v2"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	nethtml "golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 	gluehttp "maragu.dev/glue/http"
@@ -33,9 +40,6 @@ import (
 // base is a Friday morning that is not today, so that a test can tell the clock it gives from the real
 // one. It is 10:00 in the group's time zone.
 var base = time.Date(2031, 3, 14, 9, 0, 0, 0, time.UTC)
-
-// requested matches the path in each request that a Datastar expression makes.
-var requested = regexp.MustCompile(`@(?:get|post|put|patch|delete)\(([^,)]*)`)
 
 func TestTimeline(t *testing.T) {
 	t.Run("shows someone who is not signed in only that the group is private", func(t *testing.T) {
@@ -142,7 +146,7 @@ func TestTimeline(t *testing.T) {
 		is.Equal(t, "Nothing has been posted yet. The first post goes in the field above.", text(timeline))
 		is.Equal(t, 0, len(all(doc, tag("h2"))))
 		is.Equal(t, 0, len(all(doc, tag("article"))))
-		is.Equal(t, "", attr(one(t, one(t, doc, id("composer")), named("newest")), "value"))
+		is.Equal(t, "", attr(one(t, one(t, doc, id("composer")), named("days")), "value"))
 		is.Equal(t, 0, len(all(one(t, doc, id("earlier")), tag("button"))))
 	})
 
@@ -176,7 +180,8 @@ func TestTimeline(t *testing.T) {
 		is.EqualSlice(t, []string{"Monday."}, texts(all(sections[2], hasAttr("data-body"))))
 		is.EqualSlice(t, []string{"Happy new year, nearly."}, texts(all(sections[3], hasAttr("data-body"))))
 
-		is.Equal(t, "2031-03-14", attr(one(t, one(t, doc, id("composer")), named("newest")), "value"))
+		// The composer names the first few days on the page, newest first.
+		is.Equal(t, "2031-03-14,2031-03-13,2031-03-10", attr(one(t, one(t, doc, id("composer")), named("days")), "value"))
 	})
 
 	t.Run("has its headings in order: the group, then the days, then the authors", func(t *testing.T) {
@@ -204,9 +209,8 @@ func TestTimeline(t *testing.T) {
 		field := one(t, one(t, doc, id("composer")), tag("textarea"))
 		is.Equal(t, "Write to the group", text(one(t, doc, func(n *nethtml.Node) bool { return n.Data == "label" && attr(n, "for") == attr(field, "id") })))
 
-		opened := a.patches(t, a.post(t, cookie, "/comments/open", url.Values{"post": {post.ID.String()}}, true))
-		field = one(t, opened[0], tag("textarea"))
-		is.Equal(t, "Write a comment", text(one(t, opened[0], func(n *nethtml.Node) bool { return n.Data == "label" && attr(n, "for") == attr(field, "id") })))
+		field = one(t, one(t, doc, id("post-"+post.ID.String()+"-comment-form")), tag("textarea"))
+		is.Equal(t, "Write a comment", text(one(t, doc, func(n *nethtml.Node) bool { return n.Data == "label" && attr(n, "for") == attr(field, "id") })))
 	})
 
 	t.Run("marks what is new to the reader, and a reload uses the marks on posts up", func(t *testing.T) {
@@ -272,8 +276,9 @@ func TestTimeline(t *testing.T) {
 		doc := parse(t, a.get(t, a.signIn(t, signe), "/").Body.String())
 
 		is.Equal(t, 0, len(all(doc, tag("a"))))
-		is.EqualSlice(t, []string{"Post"}, texts(all(doc, tag("button"))))
-		is.EqualSlice(t, []string{"/posts", "/comments/open", "/posts/earlier"}, attrs(all(doc, tag("form")), "action"))
+		is.EqualSlice(t, []string{"Post", "Comment"}, texts(all(doc, tag("button"))))
+		is.EqualSlice(t, []string{"/posts", "/comments/open", "/comments", "/posts/earlier"}, attrs(all(doc, tag("form")), "action"))
+		is.Equal(t, 0, len(all(doc, tag("input")))-len(all(doc, func(n *nethtml.Node) bool { return n.Data == "input" && attr(n, "type") == "hidden" })))
 	})
 
 	t.Run("answers a path that is not there with a page that has nothing of the group on it", func(t *testing.T) {
@@ -297,7 +302,7 @@ func TestTimeline_post(t *testing.T) {
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 		cookie := a.signIn(t, signe)
 
-		res := a.post(t, cookie, "/posts", url.Values{"body": {"  Cake in the kitchen.\r\n\r\nIt is carrot.  "}, "newest": {"2031-03-14"}}, true)
+		res := a.post(t, cookie, "/posts", url.Values{"body": {"  Cake in the kitchen.\r\n\r\nIt is carrot.  "}, "days": {"2031-03-14,2031-03-13"}}, true)
 		is.Equal(t, http.StatusOK, res.Code)
 		is.Equal(t, "text/event-stream", res.Header().Get("Content-Type"))
 
@@ -308,7 +313,7 @@ func TestTimeline_post(t *testing.T) {
 		is.Equal(t, "", decoded[0].Mode)
 		composer := one(t, patches[0], id("composer"))
 		is.Equal(t, "", text(one(t, composer, tag("textarea"))))
-		is.Equal(t, "2031-03-14", attr(one(t, composer, named("newest")), "value"))
+		is.Equal(t, "2031-03-14,2031-03-13", attr(one(t, composer, named("days")), "value"))
 		is.Equal(t, 0, len(all(composer, role("alert"))))
 
 		is.Equal(t, "#day-2031-03-14-posts", decoded[1].Selector)
@@ -343,28 +348,120 @@ func TestTimeline_post(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 
-		res := a.post(t, a.signIn(t, signe), "/posts", url.Values{"body": {"Cake."}, "newest": {"2031-03-13"}}, true)
+		res := a.post(t, a.signIn(t, signe), "/posts", url.Values{"body": {"Cake."}, "days": {"2031-03-13,2031-03-10,2031-03-09"}}, true)
 
 		decoded, patches := a.decode(t, res), a.patches(t, res)
+		is.Equal(t, 3, len(decoded))
 		is.Equal(t, "#timeline", decoded[1].Selector)
 		is.Equal(t, "prepend", decoded[1].Mode)
 		section := one(t, patches[1], tag("section"))
 		is.Equal(t, "Today Friday 14 March", text(one(t, section, tag("h2"))))
 		is.Equal(t, "Cake.", text(one(t, one(t, section, id("day-2031-03-14-posts")), hasAttr("data-body"))))
-		is.Equal(t, "2031-03-14", attr(one(t, patches[0], named("newest")), "value"))
+
+		// The composer now names the new day first, and still only a few days.
+		is.Equal(t, "2031-03-14,2031-03-13,2031-03-10", attr(one(t, patches[0], named("days")), "value"))
+	})
+
+	t.Run("sets the headings right that a page left open overnight still has as today and yesterday", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		a.createPost(t, signe, base.Add(-25*time.Hour), "Thursday's.")
+		a.createPost(t, signe, base.Add(-time.Hour), "Friday's.")
+		cookie := a.signIn(t, signe)
+
+		doc := parse(t, a.get(t, cookie, "/").Body.String())
+		is.EqualSlice(t, []string{"Today Friday 14 March", "Yesterday Thursday 13 March"}, texts(all(doc, tag("h2"))))
+		days := attr(one(t, one(t, doc, id("composer")), named("days")), "value")
+
+		// The page stays open, and the next post is written the morning after.
+		a.clock.t = base.Add(24 * time.Hour)
+		res := a.post(t, cookie, "/posts", url.Values{"body": {"Saturday's."}, "days": {days}}, true)
+
+		decoded, patches := a.decode(t, res), a.patches(t, res)
+		is.Equal(t, 3, len(decoded))
+		is.Equal(t, "#timeline", decoded[1].Selector)
+		is.Equal(t, "prepend", decoded[1].Mode)
+		is.EqualSlice(t, []string{"Today Saturday 15 March"}, texts(all(patches[1], tag("h2"))))
+
+		// The headings that were on the page come again, by their IDs, with what is true now.
+		is.Equal(t, "", decoded[2].Selector)
+		is.Equal(t, "", decoded[2].Mode)
+		is.EqualSlice(t, []string{"Yesterday Friday 14 March", "Thursday 13 March"}, texts(all(patches[2], tag("h2"))))
+		for _, date := range []string{"2031-03-14", "2031-03-13"} {
+			was := one(t, doc, id("day-"+date+"-heading"))
+			is.Equal(t, "h2", was.Data)
+			is.Equal(t, "h2", one(t, patches[2], id("day-"+date+"-heading")).Data)
+		}
+
+		// A reload shows the same three headings.
+		doc = parse(t, a.get(t, cookie, "/").Body.String())
+		is.EqualSlice(t, []string{"Today Saturday 15 March", "Yesterday Friday 14 March", "Thursday 13 March"}, texts(all(doc, tag("h2"))))
+	})
+
+	t.Run("puts a post under the heading of its day wherever on the page that is, when the clocks have gone back past midnight", func(t *testing.T) {
+		// In St. John's on 7 November 2010, 00:01 became 23:01 the day before. So a post written at
+		// 23:30 on Saturday comes after a post written just after midnight on Sunday.
+		a := newApp(t, inZone("America/St_Johns"))
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		a.createPost(t, signe, time.Date(2010, 11, 6, 20, 0, 0, 0, time.UTC), "Saturday afternoon.")
+		a.createPost(t, signe, time.Date(2010, 11, 7, 2, 30, 30, 0, time.UTC), "Sunday, 30 seconds old.")
+		a.clock.t = time.Date(2010, 11, 7, 3, 0, 0, 0, time.UTC)
+		cookie := a.signIn(t, signe)
+
+		doc := parse(t, a.get(t, cookie, "/").Body.String())
+		is.EqualSlice(t, []string{"Sunday 7 November", "Today Saturday 6 November"}, texts(all(doc, tag("h2"))))
+		days := attr(one(t, one(t, doc, id("composer")), named("days")), "value")
+		is.Equal(t, "2010-11-07,2010-11-06", days)
+
+		res := a.post(t, cookie, "/posts", url.Values{"body": {"Saturday again."}, "days": {days}}, true)
+
+		decoded, patches := a.decode(t, res), a.patches(t, res)
+		is.Equal(t, 2, len(decoded))
+		is.Equal(t, "#day-2010-11-06-posts", decoded[1].Selector)
+		is.Equal(t, "prepend", decoded[1].Mode)
+		is.Equal(t, 0, len(all(patches[1], tag("h2"))))
+		is.Equal(t, days, attr(one(t, patches[0], named("days")), "value"))
 	})
 
 	t.Run("puts the first post in the place of the words that say the timeline is empty", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 
-		res := a.post(t, a.signIn(t, signe), "/posts", url.Values{"body": {"Cake."}, "newest": {""}}, true)
+		res := a.post(t, a.signIn(t, signe), "/posts", url.Values{"body": {"Cake."}, "days": {""}}, true)
 
 		decoded, patches := a.decode(t, res), a.patches(t, res)
+		is.Equal(t, 2, len(decoded))
 		is.Equal(t, "#timeline", decoded[1].Selector)
 		is.Equal(t, "inner", decoded[1].Mode)
 		is.Equal(t, "Today Friday 14 March", text(one(t, patches[1], tag("h2"))))
 		is.Equal(t, "Cake.", text(one(t, patches[1], hasAttr("data-body"))))
+		is.Equal(t, "2031-03-14", attr(one(t, patches[0], named("days")), "value"))
+	})
+
+	t.Run("reads the days a page names leniently, and never as anything but dates", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+
+		for days, expected := range map[string]string{
+			"garbage":                         "2031-03-14",
+			"2031-03-13,,x,2031-03-13":        "2031-03-14,2031-03-13",
+			"2031-02-30,#timeline,2031-03-12": "2031-03-14,2031-03-12",
+			"2031-03-13,2031-03-12,2031-03-11,2031-03-10,2031-03-09": "2031-03-14,2031-03-13,2031-03-12",
+			"<script>alert(1)</script>":                              "2031-03-14",
+		} {
+			res := a.post(t, a.signIn(t, signe), "/posts", url.Values{"body": {"Cake."}, "days": {days}}, true)
+
+			decoded, patches := a.decode(t, res), a.patches(t, res)
+			is.Equal(t, expected, attr(one(t, patches[0], named("days")), "value"), days)
+			for _, d := range decoded {
+				is.True(t, regexp.MustCompile(`^(|#timeline|#day-\d{4}-\d{2}-\d{2}-posts)$`).MatchString(d.Selector), d.Selector)
+			}
+			for _, p := range patches {
+				for _, h := range all(p, tag("h2")) {
+					is.True(t, regexp.MustCompile(`^day-\d{4}-\d{2}-\d{2}-heading$`).MatchString(attr(h, "id")), attr(h, "id"))
+				}
+			}
+		}
 	})
 
 	t.Run("does not count as a look at the timeline", func(t *testing.T) {
@@ -374,7 +471,7 @@ func TestTimeline_post(t *testing.T) {
 		a.createPost(t, thomas, base.Add(-time.Hour), "New to Signe.")
 		cookie := a.signIn(t, signe)
 
-		res := a.post(t, cookie, "/posts", url.Values{"body": {"Cake."}, "newest": {"2031-03-14"}}, true)
+		res := a.post(t, cookie, "/posts", url.Values{"body": {"Cake."}, "days": {"2031-03-14"}}, true)
 		is.Equal(t, http.StatusOK, res.Code)
 
 		// Had posting been a look, this would be the second one, and the mark would be gone.
@@ -395,7 +492,7 @@ func TestTimeline_post(t *testing.T) {
 			a := newApp(t)
 			signe := sqlitetest.CreateUser(t, a.db, "Signe")
 
-			res := a.post(t, a.signIn(t, signe), "/posts", url.Values{"body": {test.body}, "newest": {"2031-03-13"}, "field": {"p_before"}}, true)
+			res := a.post(t, a.signIn(t, signe), "/posts", url.Values{"body": {test.body}, "days": {"2031-03-13,2031-03-12"}, "field": {"p_before"}}, true)
 			is.Equal(t, http.StatusOK, res.Code)
 
 			decoded, patches := a.decode(t, res), a.patches(t, res)
@@ -412,21 +509,67 @@ func TestTimeline_post(t *testing.T) {
 			is.Equal(t, "true", attr(field, "aria-invalid"))
 			is.Equal(t, attr(alert, "id"), attr(field, "aria-describedby"))
 			is.Equal(t, "composer-body-p_before", attr(field, "id"))
-			is.Equal(t, "2031-03-13", attr(one(t, composer, named("newest")), "value"))
+			is.Equal(t, "2031-03-13,2031-03-12", attr(one(t, composer, named("days")), "value"))
 
 			is.Equal(t, 0, a.count(t, "posts"))
 		})
 	}
 
-	t.Run("refuses a request larger than any post as too long, without reading it all", func(t *testing.T) {
+	t.Run("refuses a body many times too long like any other, with everything the page sent kept", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		typed := strings.Repeat("æ", 100_000)
 
-		res := a.post(t, a.signIn(t, signe), "/posts", url.Values{"body": {strings.Repeat("a", 1<<20)}}, true)
+		res := a.post(t, a.signIn(t, signe), "/posts", url.Values{"body": {typed}, "days": {"2031-03-13"}, "field": {"p_before"}}, true)
 		is.Equal(t, http.StatusOK, res.Code)
 
 		composer := one(t, a.patches(t, res)[0], id("composer"))
 		is.Equal(t, "That is too long. A post can be up to 10,000 characters.", text(one(t, composer, role("alert"))))
+		is.Equal(t, typed, text(one(t, composer, tag("textarea"))))
+		is.Equal(t, "composer-body-p_before", attr(one(t, composer, tag("textarea")), "id"))
+		is.Equal(t, "2031-03-13", attr(one(t, composer, named("days")), "value"))
+		is.Equal(t, 0, a.count(t, "posts"))
+	})
+
+	t.Run("answers a request too large to read with an error and no patch, so that nothing on the page changes", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
+		cookie := a.signIn(t, signe)
+
+		for path, form := range map[string]url.Values{
+			"/posts":         {"days": {"2031-03-14"}, "field": {"p_before"}, "body": {strings.Repeat("a", 2<<20)}},
+			"/comments":      {"post": {post.ID.String()}, "field": {"c_before"}, "body": {strings.Repeat("a", 2<<20)}},
+			"/comments/open": {"post": {strings.Repeat("a", 2<<20)}},
+			"/posts/earlier": {"after": {strings.Repeat("a", 2<<20)}},
+		} {
+			for _, datastar := range []bool{true, false} {
+				res := a.post(t, cookie, path, form, datastar)
+				is.Equal(t, http.StatusRequestEntityTooLarge, res.Code, path)
+				is.True(t, !strings.Contains(res.Header().Get("Content-Type"), "event-stream"), path)
+				is.Equal(t, "That is too long", text(one(t, parse(t, res.Body.String()), tag("h1"))))
+			}
+		}
+		is.Equal(t, 1, a.count(t, "posts"))
+		is.Equal(t, 0, a.count(t, "comments"))
+	})
+
+	t.Run("answers a body that is not a form with a plain error", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		cookie := a.signIn(t, signe)
+
+		for _, path := range []string{"/posts", "/comments", "/comments/open", "/posts/earlier"} {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader("body=%zz&post=%"))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Datastar-Request", "true")
+			req.AddCookie(cookie)
+			res := httptest.NewRecorder()
+			a.handler.ServeHTTP(res, req)
+
+			is.Equal(t, http.StatusBadRequest, res.Code, path)
+			is.Equal(t, "That did not work", text(one(t, parse(t, res.Body.String()), tag("h1"))))
+		}
 		is.Equal(t, 0, a.count(t, "posts"))
 	})
 
@@ -444,7 +587,7 @@ func TestTimeline_post(t *testing.T) {
 		is.Equal(t, http.StatusUnprocessableEntity, res.Code)
 		doc := parse(t, res.Body.String())
 		is.Equal(t, "That was not posted", text(one(t, doc, tag("h1"))))
-		is.True(t, strings.Contains(text(doc), "Write something first. Go back to try again."), text(doc))
+		is.True(t, strings.Contains(text(doc), "Write something first."), text(doc))
 		is.Equal(t, 1, a.count(t, "posts"))
 	})
 }
@@ -474,7 +617,9 @@ func TestTimeline_earlier(t *testing.T) {
 		earlier := one(t, doc, id("earlier"))
 		is.Equal(t, "Earlier posts", text(one(t, earlier, tag("button"))))
 		after := attr(one(t, earlier, named("after")), "value")
+		is.Equal(t, "2031-03-14,2031-03-13", attr(one(t, earlier, named("days")), "value"))
 
+		// The cursor alone says which day the page ended on, whether or not the page names its days.
 		res := a.post(t, cookie, "/posts/earlier", url.Values{"after": {after}}, true)
 		is.Equal(t, http.StatusOK, res.Code)
 		decoded, patches := a.decode(t, res), a.patches(t, res)
@@ -504,6 +649,59 @@ func TestTimeline_earlier(t *testing.T) {
 		earlier = one(t, patches[2], id("earlier"))
 		is.Equal(t, 0, len(all(earlier, tag("button"))))
 		is.Equal(t, 0, len(all(earlier, named("after"))))
+	})
+
+	t.Run("gives a day one heading across pages when the clocks have gone back past midnight too", func(t *testing.T) {
+		// In St. John's on 7 November 2010, 00:01 became 23:01 the day before. The newest twenty posts
+		// are one from Sunday and nineteen from the Saturday hour that came after it on the clock. The
+		// page after them begins with the post from the first minute of Sunday, which is a day the
+		// first page has a heading for, but not the day the first page ended on.
+		a := newApp(t, inZone("America/St_Johns"))
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		a.createPost(t, signe, time.Date(2010, 11, 6, 20, 0, 0, 0, time.UTC), "Saturday afternoon.")
+		a.createPost(t, signe, time.Date(2010, 11, 7, 2, 30, 30, 0, time.UTC), "Sunday, 30 seconds old.")
+		for i := range 19 {
+			a.createPost(t, signe, time.Date(2010, 11, 7, 2, 40+i, 0, 0, time.UTC), fmt.Sprint("Saturday again ", i))
+		}
+		a.createPost(t, signe, time.Date(2010, 11, 7, 4, 0, 0, 0, time.UTC), "Sunday, half past midnight.")
+		a.clock.t = time.Date(2010, 11, 7, 12, 0, 0, 0, time.UTC)
+		cookie := a.signIn(t, signe)
+
+		doc := parse(t, a.get(t, cookie, "/").Body.String())
+		is.EqualSlice(t, []string{"Today Sunday 7 November", "Yesterday Saturday 6 November"}, texts(all(doc, tag("h2"))))
+		earlier := one(t, doc, id("earlier"))
+		form := url.Values{"after": {attr(one(t, earlier, named("after")), "value")}, "days": {attr(one(t, earlier, named("days")), "value")}}
+		is.Equal(t, "2010-11-07,2010-11-06", form.Get("days"))
+
+		res := a.post(t, cookie, "/posts/earlier", form, true)
+		decoded, patches := a.decode(t, res), a.patches(t, res)
+		is.Equal(t, 3, len(decoded))
+		is.Equal(t, "#day-2010-11-07-posts", decoded[0].Selector)
+		is.EqualSlice(t, []string{"Sunday, 30 seconds old."}, texts(all(patches[0], hasAttr("data-body"))))
+		is.Equal(t, "#day-2010-11-06-posts", decoded[1].Selector)
+		is.EqualSlice(t, []string{"Saturday afternoon."}, texts(all(patches[1], hasAttr("data-body"))))
+		for _, p := range patches {
+			is.Equal(t, 0, len(all(p, tag("h2"))))
+			is.Equal(t, 0, len(all(p, tag("section"))))
+		}
+	})
+
+	t.Run("names the days at the end of the page with each page it loads, so that the next one knows them", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		for i := range 45 {
+			a.createPost(t, signe, base.Add(-time.Duration(i)*8*time.Hour), fmt.Sprint("Post ", i))
+		}
+		cookie := a.signIn(t, signe)
+
+		doc := parse(t, a.get(t, cookie, "/").Body.String())
+		earlier := one(t, doc, id("earlier"))
+		form := url.Values{"after": {attr(one(t, earlier, named("after")), "value")}, "days": {attr(one(t, earlier, named("days")), "value")}}
+		is.Equal(t, "2031-03-10,2031-03-09,2031-03-08", form.Get("days"))
+
+		patches := a.patches(t, a.post(t, cookie, "/posts/earlier", form, true))
+		earlier = one(t, patches[len(patches)-1], id("earlier"))
+		is.Equal(t, "2031-03-03,2031-03-02,2031-03-01", attr(one(t, earlier, named("days")), "value"))
 	})
 
 	t.Run("offers the page after the one it loaded while there is one", func(t *testing.T) {
@@ -561,7 +759,7 @@ func TestTimeline_earlier(t *testing.T) {
 			cookie := a.signIn(t, signe)
 
 			for _, datastar := range []bool{true, false} {
-				res := a.post(t, cookie, "/posts/earlier", url.Values{"after": {after}}, datastar)
+				res := a.post(t, cookie, "/posts/earlier", url.Values{"after": {after}, "days": {after}}, datastar)
 				is.Equal(t, http.StatusBadRequest, res.Code)
 
 				doc := parse(t, res.Body.String())
@@ -577,14 +775,23 @@ func TestTimeline_earlier(t *testing.T) {
 		})
 	}
 
-	t.Run("sends a browser that does not run the page's script back to the group page", func(t *testing.T) {
+	t.Run("tells a browser that does not run the page's script that this takes JavaScript, without counting as a look", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		thomas := sqlitetest.CreateUser(t, a.db, "Thomas")
+		a.createPost(t, thomas, base.Add(-time.Hour), "New to Signe.")
+		cookie := a.signIn(t, signe)
 
 		after := model.TimelineCursor{Created: model.Time{T: base}, Seq: 5}.String()
-		res := a.post(t, a.signIn(t, signe), "/posts/earlier", url.Values{"after": {after}}, false)
-		is.Equal(t, http.StatusSeeOther, res.Code)
-		is.Equal(t, "/", res.Header().Get("Location"))
+		res := a.post(t, cookie, "/posts/earlier", url.Values{"after": {after}}, false)
+		is.Equal(t, http.StatusBadRequest, res.Code)
+		is.Equal(t, "", res.Header().Get("Location"))
+		page := res.Body.String()
+		is.Equal(t, "That needs JavaScript", text(one(t, parse(t, page), tag("h1"))))
+		is.True(t, !strings.Contains(page, "New to Signe."), page)
+
+		doc := parse(t, a.get(t, cookie, "/").Body.String())
+		is.EqualSlice(t, []string{"new"}, texts(all(doc, mark)))
 	})
 }
 
@@ -604,6 +811,12 @@ func TestTimeline_comments(t *testing.T) {
 		doc := parse(t, a.get(t, cookie, "/").Body.String())
 		is.Equal(t, "3 comments2 new", text(one(t, doc, id("post-"+post.ID.String()+"-comments-summary"))))
 		is.Equal(t, "", text(one(t, doc, id("post-"+post.ID.String()+"-comments"))))
+
+		// The field to add a comment is on the page from the start, under the post it is for.
+		form := one(t, one(t, doc, id("post-"+post.ID.String())), func(n *nethtml.Node) bool { return n.Data == "form" && attr(n, "action") == "/comments" })
+		is.Equal(t, post.ID.String(), attr(one(t, form, named("post")), "value"))
+		is.Equal(t, "", text(one(t, form, tag("textarea"))))
+		is.Equal(t, "Comment", text(one(t, form, tag("button"))))
 
 		res := a.post(t, cookie, "/comments/open", url.Values{"post": {post.ID.String()}}, true)
 		is.Equal(t, http.StatusOK, res.Code)
@@ -626,11 +839,9 @@ func TestTimeline_comments(t *testing.T) {
 		is.Equal(t, 0, len(all(items[1], mark)))
 		is.EqualSlice(t, []string{"new"}, texts(all(items[2], mark)))
 
-		form := one(t, comments, tag("form"))
-		is.Equal(t, "/comments", attr(form, "action"))
-		is.Equal(t, post.ID.String(), attr(one(t, form, named("post")), "value"))
-		is.Equal(t, "", text(one(t, form, tag("textarea"))))
-		is.Equal(t, "Comment", text(one(t, form, tag("button"))))
+		// The answer has no field in it, so that it leaves alone what someone has begun to write.
+		is.Equal(t, 0, len(all(patches[0], tag("form"))))
+		is.Equal(t, 0, len(all(patches[0], tag("textarea"))))
 
 		// The mark is gone for this post, and stays on the other one.
 		doc = parse(t, a.get(t, cookie, "/").Body.String())
@@ -642,7 +853,7 @@ func TestTimeline_comments(t *testing.T) {
 		is.Equal(t, 0, len(all(patches[0], mark)))
 	})
 
-	t.Run("opens a post without comments with just the field to add one", func(t *testing.T) {
+	t.Run("opens a post without comments with nothing in the place for them", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
@@ -652,7 +863,7 @@ func TestTimeline_comments(t *testing.T) {
 		is.Equal(t, "Comment", text(one(t, patches[0], id("post-"+post.ID.String()+"-comments-summary"))))
 		comments := one(t, patches[0], id("post-"+post.ID.String()+"-comments"))
 		is.Equal(t, 0, len(all(comments, tag("li"))))
-		is.Equal(t, 1, len(all(comments, tag("textarea"))))
+		is.Equal(t, "", text(comments))
 	})
 
 	t.Run("adds a comment, and answers with the comments with the new one last and an empty field", func(t *testing.T) {
@@ -676,7 +887,7 @@ func TestTimeline_comments(t *testing.T) {
 		is.EqualSlice(t, []string{"10:00"}, texts(all(items[1], tag("time"))))
 		is.Equal(t, 0, len(all(items[1], mark)))
 
-		form := one(t, comments, tag("form"))
+		form := one(t, patches[0], id("post-"+post.ID.String()+"-comment-form"))
 		field := one(t, form, tag("textarea"))
 		is.Equal(t, "", text(field))
 		is.True(t, attr(field, "id") != "post-"+post.ID.String()+"-comment-body", "the field kept its ID")
@@ -720,6 +931,22 @@ func TestTimeline_comments(t *testing.T) {
 		})
 	}
 
+	t.Run("answers with text even when what it puts back on the page was not", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		cookie := a.signIn(t, signe)
+
+		for path, form := range map[string]url.Values{
+			"/posts":    {"body": {""}, "field": {"\r\nevent: \xb7"}, "days": {"\xff"}},
+			"/comments": {"body": {"\xff"}, "field": {"\xb7"}, "post": {"p_\xff"}},
+		} {
+			res := a.post(t, cookie, path, form, true)
+			is.Equal(t, http.StatusOK, res.Code, path)
+			is.True(t, utf8.Valid(res.Body.Bytes()), path+": the answer is not valid UTF-8")
+			is.Equal(t, 1, len(a.patches(t, res)), path)
+		}
+	})
+
 	t.Run("answers a post that is not there with not found", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
@@ -745,8 +972,9 @@ func TestTimeline_comments(t *testing.T) {
 
 		// Opening is not recorded, since nothing was shown.
 		res := a.post(t, cookie, "/comments/open", url.Values{"post": {post.ID.String()}}, false)
-		is.Equal(t, http.StatusSeeOther, res.Code)
-		is.Equal(t, "/", res.Header().Get("Location"))
+		is.Equal(t, http.StatusBadRequest, res.Code)
+		is.Equal(t, "That needs JavaScript", text(one(t, parse(t, res.Body.String()), tag("h1"))))
+		is.True(t, !strings.Contains(res.Body.String(), "Thank you."), res.Body.String())
 		doc := parse(t, a.get(t, cookie, "/").Body.String())
 		is.Equal(t, "1 comment1 new", text(one(t, doc, id("post-"+post.ID.String()+"-comments-summary"))))
 
@@ -787,7 +1015,7 @@ func TestTimeline_text(t *testing.T) {
 
 			res = a.post(t, cookie, "/comments", url.Values{"post": {postID}, "body": {body}}, true)
 			is.Equal(t, http.StatusOK, res.Code)
-			comments := one(t, a.patches(t, res)[0], id("post-"+postID+"-comments"))
+			comments := a.patches(t, res)[0]
 			item := one(t, comments, tag("li"))
 			is.Equal(t, body, text(one(t, item, hasAttr("data-body"))))
 			is.True(t, strings.HasPrefix(text(item), body), text(item))
@@ -807,18 +1035,24 @@ func TestTimeline_text(t *testing.T) {
 			is.Equal(t, 1, len(all(doc, tag("section"))))
 			is.Equal(t, 1, len(all(doc, tag("article"))))
 
-			// A refusal shows what was typed as text too.
-			res = a.post(t, cookie, "/posts", url.Values{"body": {body + "\x00"}}, true)
-			composer := one(t, a.patches(t, res)[0], id("composer"))
-			is.Equal(t, body+"\ufffd", text(one(t, composer, tag("textarea"))))
-			is.Equal(t, 1, len(all(composer, tag("textarea"))))
-			is.Equal(t, 0, len(all(composer, tag("script"))))
+			// A refusal shows what was typed as text too, with what is not text at all replaced.
+			for _, bad := range []string{"\x00", "\xff"} {
+				res = a.post(t, cookie, "/posts", url.Values{"body": {body + bad}}, true)
+				is.True(t, utf8.Valid(res.Body.Bytes()), "the answer is not valid UTF-8")
+				composer := one(t, a.patches(t, res)[0], id("composer"))
+				is.Equal(t, body+"\ufffd", text(one(t, composer, tag("textarea"))))
+				is.Equal(t, 1, len(all(composer, tag("textarea"))))
+				is.Equal(t, 0, len(all(composer, tag("script"))))
+			}
 		})
 	}
 }
 
 func TestTimeline_policy(t *testing.T) {
-	t.Run("serves every page with a policy that does not allow evaluating strings as scripts, and allows Datastar by its origin and the page's nonce", func(t *testing.T) {
+	// requested matches the path in each request that a Datastar expression makes.
+	requested := regexp.MustCompile(`@(?:get|post|put|patch|delete)\(([^,)]*)`)
+
+	t.Run("serves every page with a policy that does not allow evaluating strings as scripts, and allows Datastar by its origin and the page's nonce, and lets none of its own pages be stored", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 		a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
@@ -864,8 +1098,9 @@ func TestTimeline_policy(t *testing.T) {
 				}
 			}
 
-			// A page with a nonce must not be kept and shown again under another response's policy.
-			if request.path == "/" {
+			// A page with a nonce must not be kept and shown again under another response's policy. The
+			// not-found page is not one of the app's routes, and has nothing of the group on it.
+			if request.path != "/nope" {
 				is.Equal(t, "no-store", res.Header().Get("Cache-Control"))
 			}
 		}
@@ -956,9 +1191,18 @@ func TestTimeline_policy(t *testing.T) {
 				}
 			}
 		}
-		is.True(t, urls > 40, "expected the check to have seen URLs")
+		is.True(t, urls > 60, "expected the check to have seen URLs")
 		for _, form := range all(doc, tag("form")) {
 			is.Equal(t, "post", attr(form, "method"))
+		}
+
+		// No ID is written into an expression either, where it would be code and not data.
+		for _, n := range all(doc, func(*nethtml.Node) bool { return true }) {
+			for _, at := range n.Attr {
+				if strings.HasPrefix(at.Key, "data-on") {
+					is.True(t, !strings.Contains(at.Val, "p_"), at.Val)
+				}
+			}
 		}
 	})
 
@@ -990,8 +1234,220 @@ func TestTimeline_policy(t *testing.T) {
 	})
 }
 
+func TestTimeline_failures(t *testing.T) {
+	// requests that each route gets, as Datastar sends them.
+	requests := func(post model.Post) map[string]url.Values {
+		return map[string]url.Values{
+			"/posts":         {"body": {"A secret about the kettle"}},
+			"/posts/earlier": {"after": {model.TimelineCursor{Created: model.Time{T: base}, Seq: 5}.String()}},
+			"/comments/open": {"post": {post.ID.String()}},
+			"/comments":      {"post": {post.ID.String()}, "body": {"A secret about the kettle"}},
+		}
+	}
+
+	for _, test := range []struct {
+		name string
+		set  func(*store)
+	}{
+		{name: "is no longer active", set: func(s *store) { s.inactive = true }},
+		{name: "is gone", set: func(s *store) { s.gone = true }},
+	} {
+		t.Run("treats someone who turns out to be someone who "+test.name+" in the middle of a request as not signed in", func(t *testing.T) {
+			a := newApp(t)
+			signe := sqlitetest.CreateUser(t, a.db, "Signe")
+			post := a.createPost(t, signe, base.Add(-time.Hour), "Cake in the kitchen.")
+			a.createComment(t, signe, post, base.Add(-time.Minute), "It is carrot.")
+			cookie := a.signIn(t, signe)
+
+			// The session still passes, and then the business logic finds otherwise.
+			test.set(a.store)
+
+			res := a.get(t, cookie, "/")
+			is.Equal(t, http.StatusOK, res.Code)
+			page := res.Body.String()
+			is.Equal(t, "This group is private.", text(one(t, parse(t, page), tag("h1"))))
+			for _, secret := range []string{"The Loft", "Cake", "carrot", "Signe"} {
+				is.True(t, !strings.Contains(page, secret), page)
+			}
+
+			for path, form := range requests(post) {
+				res := a.post(t, cookie, path, form, true)
+				is.Equal(t, http.StatusUnauthorized, res.Code, path)
+				body := res.Body.String()
+				is.Equal(t, "This group is private.", text(one(t, parse(t, body), tag("h1"))))
+				for _, secret := range []string{"The Loft", "Cake", "carrot", "Signe"} {
+					is.True(t, !strings.Contains(body, secret), body)
+				}
+			}
+			is.Equal(t, 1, a.count(t, "posts"))
+			is.Equal(t, 1, a.count(t, "comments"))
+		})
+	}
+
+	t.Run("answers a failure underneath with an error page that has nothing of the group on it, and logs it without what was written", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake in the kitchen.")
+		cookie := a.signIn(t, signe)
+
+		for path, operation := range map[string]string{
+			"/posts":         "CreatePost",
+			"/posts/earlier": "GetTimeline",
+			"/comments/open": "GetComments",
+			"/comments":      "CreateComment",
+		} {
+			a.store.fail = map[string]error{operation: errors.New("the disk is full")}
+			a.logs.Reset()
+
+			res := a.post(t, cookie, path, requests(post)[path], true)
+			is.Equal(t, http.StatusInternalServerError, res.Code, path)
+			is.True(t, !strings.Contains(res.Header().Get("Content-Type"), "event-stream"), path)
+			body := res.Body.String()
+			is.Equal(t, "Something went wrong", text(one(t, parse(t, body), tag("h1"))))
+			for _, secret := range []string{"The Loft", "Cake", "Signe", "kettle", "disk"} {
+				is.True(t, !strings.Contains(body, secret), body)
+			}
+
+			is.True(t, strings.Contains(a.logs.String(), "the disk is full"), a.logs.String())
+			is.True(t, !strings.Contains(a.logs.String(), "kettle") && !strings.Contains(a.logs.String(), signe.Email.String()), a.logs.String())
+		}
+		is.Equal(t, 1, a.count(t, "posts"))
+		is.Equal(t, 0, a.count(t, "comments"))
+	})
+
+	t.Run("does not count a group page that failed as a look", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		thomas := sqlitetest.CreateUser(t, a.db, "Thomas")
+		a.createPost(t, thomas, base.Add(-time.Hour), "New to Signe.")
+		cookie := a.signIn(t, signe)
+
+		// Everything that can fail comes before the look, so a page that fails uses up no marks.
+		for _, operation := range []string{"CountActiveUsers", "GetTimeline"} {
+			a.store.fail = map[string]error{operation: errors.New("the disk is full")}
+
+			res := a.get(t, cookie, "/")
+			is.Equal(t, http.StatusInternalServerError, res.Code, operation)
+			body := res.Body.String()
+			is.Equal(t, "Something went wrong", text(one(t, parse(t, body), tag("h1"))))
+			is.True(t, !strings.Contains(body, "The Loft") && !strings.Contains(body, "New to Signe."), body)
+		}
+
+		a.store.fail = nil
+		doc := parse(t, a.get(t, cookie, "/").Body.String())
+		is.EqualSlice(t, []string{"new"}, texts(all(doc, mark)))
+	})
+
+	t.Run("refuses a request that another site makes a member's browser send", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake in the kitchen.")
+		cookie := a.signIn(t, signe)
+
+		for path, form := range requests(post) {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Origin", "https://evil.example")
+			req.Header.Set("Sec-Fetch-Site", "cross-site")
+			req.AddCookie(cookie)
+			res := httptest.NewRecorder()
+			a.handler.ServeHTTP(res, req)
+
+			is.Equal(t, http.StatusForbidden, res.Code, path)
+			is.True(t, !strings.Contains(res.Body.String(), "Cake"), res.Body.String())
+		}
+		is.Equal(t, 1, a.count(t, "posts"))
+		is.Equal(t, 0, a.count(t, "comments"))
+	})
+}
+
+func TestTimeline_traces(t *testing.T) {
+	t.Run("records in no span what was written, an email address, or whose comments someone opened", func(t *testing.T) {
+		// The app gets its tracers from the global provider when it is set up, so the recorder goes in
+		// first, and the provider that was there comes back afterwards.
+		recorder := tracetest.NewSpanRecorder()
+		previous := otel.GetTracerProvider()
+		otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder)))
+		t.Cleanup(func() {
+			otel.SetTracerProvider(previous)
+		})
+
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		thomas := sqlitetest.CreateUser(t, a.db, "Thomas")
+		cookie := a.signIn(t, signe)
+
+		// recorded is everything the spans that have ended so far say, each as one line.
+		recorded := func() []string {
+			var lines []string
+			for _, span := range recorder.Ended() {
+				line := span.Name() + " " + span.Status().Description
+				for _, attribute := range span.Attributes() {
+					line += " " + string(attribute.Key) + "=" + attribute.Value.String()
+				}
+				for _, event := range span.Events() {
+					line += " " + event.Name
+					for _, attribute := range event.Attributes {
+						line += " " + string(attribute.Key) + "=" + attribute.Value.String()
+					}
+				}
+				lines = append(lines, line)
+			}
+			return lines
+		}
+
+		a.get(t, cookie, "/")
+		res := a.post(t, cookie, "/posts", url.Values{"body": {"A secret about the coffee machine"}}, true)
+		postID := attr(one(t, a.patches(t, res)[1], tag("article")), "data-post")
+		a.post(t, cookie, "/posts", url.Values{"body": {"An unposted secret\x00"}}, true)
+		a.post(t, cookie, "/comments", url.Values{"post": {postID}, "body": {"A secret about the kettle"}}, true)
+		a.post(t, cookie, "/comments", url.Values{"post": {postID}, "body": {""}, "field": {"secret"}}, true)
+		a.store.fail = map[string]error{"CreatePost": errors.New("the disk is full")}
+		a.post(t, cookie, "/posts", url.Values{"body": {"A secret that fails"}}, true)
+		a.store.fail = nil
+
+		written := recorded()
+		is.True(t, len(written) > 10, "expected the recorder to have seen spans")
+		for _, line := range written {
+			for _, secret := range []string{"secret", "coffee", "kettle", signe.Email.String(), thomas.Email.String()} {
+				is.True(t, !strings.Contains(line, secret), line)
+			}
+		}
+		// The check sees what it should: the requests with their paths and who made them, and the
+		// failure, which is not a secret.
+		joined := strings.Join(written, "\n")
+		is.True(t, strings.Contains(joined, "url.path=/comments"), joined)
+		is.True(t, strings.Contains(joined, signe.ID.String()), joined)
+		is.True(t, strings.Contains(joined, "the disk is full"), joined)
+		is.True(t, strings.Contains(joined, postID), joined)
+
+		// Thomas reads: he opens the comments, and loads earlier posts. Neither the post nor the cursor
+		// is in anything recorded from then on, though the requests are, with who made them.
+		before := len(written)
+		thomasCookie := a.signIn(t, thomas)
+		a.get(t, thomasCookie, "/")
+		res = a.post(t, thomasCookie, "/comments/open", url.Values{"post": {postID}}, true)
+		is.Equal(t, http.StatusOK, res.Code)
+		a.post(t, thomasCookie, "/comments/open", url.Values{"post": {"p_nope"}}, true)
+		after := model.TimelineCursor{Created: model.Time{T: base}, Seq: 5}.String()
+		res = a.post(t, thomasCookie, "/posts/earlier", url.Values{"after": {after}, "days": {"2031-03-14"}}, true)
+		is.Equal(t, http.StatusOK, res.Code)
+
+		read := recorded()[before:]
+		for _, line := range read {
+			for _, secret := range []string{postID, "p_nope", after, "2031-03-14"} {
+				is.True(t, !strings.Contains(line, secret), line)
+			}
+		}
+		joined = strings.Join(read, "\n")
+		is.True(t, strings.Contains(joined, "url.path=/comments/open"), joined)
+		is.True(t, strings.Contains(joined, "url.path=/posts/earlier"), joined)
+		is.True(t, strings.Contains(joined, thomas.ID.String()), joined)
+	})
+}
+
 func TestInjectHTTPRouter(t *testing.T) {
-	t.Run("shows no link to a preview unless it is given one", func(t *testing.T) {
+	t.Run("shows nothing extra unless it is given something", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 
@@ -1002,9 +1458,9 @@ func TestInjectHTTPRouter(t *testing.T) {
 		}
 	})
 
-	t.Run("shows the link it is given, to someone who is signed in and to someone who is not", func(t *testing.T) {
-		a := newApp(t, func(opts *apphttp.InjectHTTPRouterOptions) {
-			opts.PreviewLink = func(signedIn bool) Node {
+	t.Run("shows the extra it is given, to someone who is signed in and to someone who is not", func(t *testing.T) {
+		a := newApp(t, func(c *config) {
+			c.extra = func(signedIn bool) Node {
 				return A(Href("/preview"), Text(fmt.Sprint("signed in: ", signedIn)))
 			}
 		})
@@ -1022,48 +1478,90 @@ func TestInjectHTTPRouter(t *testing.T) {
 func FuzzTimeline(f *testing.F) {
 	f.Add("Cake in the kitchen.", "2031-03-14", "", "")
 	f.Add("", "", "", "")
-	f.Add("<script>alert(1)</script>", "<b>", "\"><script>", "garbage")
-	f.Add("a\r\nb\x00", "2031-03-13", "p_1", model.TimelineCursor{Created: model.Time{T: base}, Seq: 1}.String())
+	f.Add("<script>alert(1)</script>", "<b>,2031-03-13", "\"><script>", "garbage")
+	f.Add("a\r\nb\x00", "2031-03-13,2031-03-12", "p_1", model.TimelineCursor{Created: model.Time{T: base}, Seq: 1}.String())
 	f.Add(strings.Repeat("æ", model.PostBodyMaxLength+1), "\xff", "\r\nevent: x", "AQAAAAAAAAAAAAAAAAAAAAAB")
+	f.Add("x", "0000-00-00,9999-12-31,2031-13-01,#timeline", "x'+alert(1)+'", "Af__x3zt0ygAAAAAAAAAAAA")
+	// Found by fuzzing: a refusal put a field value that is not valid UTF-8 back into the answer as it came.
+	f.Add("", "\xff", "\r\nevent: \xb7", "AQAAAAAAAAAAAAAAAAAAAAAB")
 
-	f.Fuzz(func(t *testing.T, body, newest, field, after string) {
+	f.Fuzz(func(t *testing.T, body, days, field, after string) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
 		cookie := a.signIn(t, signe)
 
 		// Whatever is sent, the answer is patches or a plain refusal, never a failure of the server,
-		// and patches always decode and parse, with nothing in them that the page does not put there.
-		res := a.post(t, cookie, "/posts", url.Values{"body": {body}, "newest": {newest}, "field": {field}}, true)
+		// and patches always decode and parse, with nothing in them that the page does not put there,
+		// and aimed only at the places the page has.
+		res := a.post(t, cookie, "/posts", url.Values{"body": {body}, "days": {days}, "field": {field}}, true)
 		is.Equal(t, http.StatusOK, res.Code)
+		is.True(t, utf8.Valid(res.Body.Bytes()), "the answer is not valid UTF-8")
 		patches := a.patches(t, res)
 		is.Equal(t, 1, len(all(patches[0], id("composer"))))
 		is.Equal(t, 1, len(all(patches[0], tag("textarea"))))
 		for _, p := range patches {
 			is.Equal(t, 0, len(all(p, tag("script"))))
 		}
+		for _, d := range a.decode(t, res) {
+			is.True(t, regexp.MustCompile(`^(|#timeline|#day-\d{4}-\d{2}-\d{2}-posts)$`).MatchString(d.Selector), d.Selector)
+			is.True(t, slices.Contains([]string{"", "inner", "prepend"}, d.Mode), d.Mode)
+		}
 
 		res = a.post(t, cookie, "/comments", url.Values{"post": {post.ID.String()}, "body": {body}, "field": {field}}, true)
 		is.Equal(t, http.StatusOK, res.Code)
+		is.True(t, utf8.Valid(res.Body.Bytes()), "the answer is not valid UTF-8")
 		patches = a.patches(t, res)
 		is.Equal(t, 1, len(all(patches[0], tag("textarea"))))
 		is.Equal(t, 0, len(all(patches[0], tag("script"))))
 
 		res = a.post(t, cookie, "/comments/open", url.Values{"post": {field}}, true)
-		is.True(t, res.Code == http.StatusNotFound || res.Code == http.StatusOK, fmt.Sprint(res.Code))
+		is.Equal(t, http.StatusNotFound, res.Code)
 
-		res = a.post(t, cookie, "/posts/earlier", url.Values{"after": {after}}, true)
+		res = a.post(t, cookie, "/posts/earlier", url.Values{"after": {after}, "days": {days}}, true)
 		is.True(t, res.Code == http.StatusBadRequest || res.Code == http.StatusOK, fmt.Sprint(res.Code))
 		if res.Code == http.StatusOK {
-			a.patches(t, res)
+			for _, d := range a.decode(t, res) {
+				is.True(t, regexp.MustCompile(`^(|#timeline|#day-\d{4}-\d{2}-\d{2}-posts)$`).MatchString(d.Selector), d.Selector)
+			}
 		}
 	})
 }
 
-// app is the group page's routes on a router set up the way the server sets its router up, on a real
+// FuzzTimeline_form sends bytes that may not be a form at all, to every route that reads one.
+func FuzzTimeline_form(f *testing.F) {
+	f.Add([]byte("body=Cake&days=2031-03-14"))
+	f.Add([]byte("body=%zz&post=%"))
+	f.Add([]byte("body=%00%ff&after=%0d%0a&post=;&field==&&"))
+	f.Add([]byte{0xff, 0xfe, '=', 0, '&'})
+	f.Add([]byte(strings.Repeat("a=b&", 2000)))
+
+	f.Fuzz(func(t *testing.T, form []byte) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		cookie := a.signIn(t, signe)
+
+		for _, path := range []string{"/posts", "/comments", "/comments/open", "/posts/earlier"} {
+			req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(form))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Datastar-Request", "true")
+			req.AddCookie(cookie)
+			res := httptest.NewRecorder()
+			a.handler.ServeHTTP(res, req)
+
+			is.True(t, res.Code < 500, fmt.Sprint(path, " answered ", res.Code))
+			if res.Header().Get("Content-Type") == "text/event-stream" {
+				a.patches(t, res)
+			}
+		}
+	})
+}
+
+// app is the app's routes behind the middleware that the server puts in front of every page, on a real
 // database, with a clock the test sets.
 type app struct {
 	db      *sqlite.Database
+	store   *store
 	sm      *scs.SessionManager
 	handler http.Handler
 	clock   *clock
@@ -1103,34 +1601,112 @@ func (l *logs) Reset() {
 	l.b.Reset()
 }
 
-// newApp for the group "The Loft" in Copenhagen, at the time of [base].
-func newApp(t *testing.T, opts ...func(*apphttp.InjectHTTPRouterOptions)) *app {
+// store is the real database, which a test can make fail for the business logic: with the given error
+// from the operation of the given name, or by having everyone turn out inactive or gone when the
+// business logic looks them up.
+type store struct {
+	*sqlite.Database
+	fail     map[string]error
+	inactive bool
+	gone     bool
+}
+
+func (s *store) GetUser(ctx context.Context, id model.UserID) (model.User, error) {
+	if s.gone {
+		return model.User{}, model.ErrorUserNotFound
+	}
+	u, err := s.Database.GetUser(ctx, id)
+	if s.inactive {
+		u.Active = false
+	}
+	return u, err
+}
+
+func (s *store) CountActiveUsers(ctx context.Context) (int, error) {
+	if err := s.fail["CountActiveUsers"]; err != nil {
+		return 0, err
+	}
+	return s.Database.CountActiveUsers(ctx)
+}
+
+func (s *store) CreatePost(ctx context.Context, p model.Post) (model.Post, error) {
+	if err := s.fail["CreatePost"]; err != nil {
+		return model.Post{}, err
+	}
+	return s.Database.CreatePost(ctx, p)
+}
+
+func (s *store) CreateComment(ctx context.Context, c model.Comment) (model.Comment, error) {
+	if err := s.fail["CreateComment"]; err != nil {
+		return model.Comment{}, err
+	}
+	return s.Database.CreateComment(ctx, c)
+}
+
+func (s *store) GetTimeline(ctx context.Context, reader model.UserID, after *model.TimelineCursor, limit int) ([]model.TimelinePost, *model.TimelineCursor, error) {
+	if err := s.fail["GetTimeline"]; err != nil {
+		return nil, nil, err
+	}
+	return s.Database.GetTimeline(ctx, reader, after, limit)
+}
+
+func (s *store) GetComments(ctx context.Context, reader model.UserID, postID model.PostID) ([]model.TimelineComment, error) {
+	if err := s.fail["GetComments"]; err != nil {
+		return nil, err
+	}
+	return s.Database.GetComments(ctx, reader, postID)
+}
+
+// config of an [app].
+type config struct {
+	zone  string
+	extra func(signedIn bool) Node
+}
+
+// inZone sets the group's time zone.
+func inZone(zone string) func(*config) {
+	return func(c *config) {
+		c.zone = zone
+	}
+}
+
+// newApp for the group "The Loft", in Copenhagen unless the options say otherwise, at the time of [base].
+func newApp(t *testing.T, opts ...func(*config)) *app {
 	t.Helper()
 
-	loc, err := time.LoadLocation("Europe/Copenhagen")
+	c := config{zone: "Europe/Copenhagen"}
+	for _, opt := range opts {
+		opt(&c)
+	}
+
+	loc, err := time.LoadLocation(c.zone)
 	is.NotError(t, err)
 	group := model.Group{Name: "The Loft", TimeZone: loc}
 
 	a := &app{db: sqlitetest.NewDatabase(t), sm: scs.New(), clock: &clock{t: base}, logs: &logs{}}
+	a.store = &store{Database: a.db, fail: map[string]error{}}
 	log := slog.New(slog.NewTextHandler(a.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
+	// The session's user is looked up in the real database, and everything after that in the store.
 	fat := service.NewFat(service.NewFatOptions{Log: log})
-	service.Setup(fat, nil, a.db, nil, a.clock.Now, group)
+	service.GetUser(fat, a.db)
+	service.CreateComment(fat, a.store, a.clock.Now)
+	service.CreatePost(fat, a.store, a.clock.Now)
+	service.GetComments(fat, a.store)
+	service.GetMembers(fat, a.store)
+	service.GetTimeline(fat, a.store, a.clock.Now, group)
 
-	options := apphttp.InjectHTTPRouterOptions{Group: group, Now: a.clock.Now}
-	for _, opt := range opts {
-		opt(&options)
-	}
-
-	// The middleware the server puts in front of every page, in its order and its nesting.
+	// The same middleware as [gluehttp.Server] puts in front of every page, in its order and nesting.
+	protection := http.NewCrossOriginProtection()
 	r := gluehttp.NewRouter(gluehttp.NewRouterOpts{SM: a.sm})
+	r.Use(gluehttp.OpenTelemetry, protection.Handler)
 	r.Group(func(r *gluehttp.Router) {
 		r.Use(httph.NoClickjacking, httph.ContentSecurityPolicy(apphttp.CSP(false)))
 		r.Use(a.sm.LoadAndSave, gluehttp.Authenticate(log, a.sm, a.db))
 		r.NotFound(gluehttp.NotFound(html.Page))
 
 		r.Group(func(r *gluehttp.Router) {
-			apphttp.InjectHTTPRouter(log, fat, options)(r)
+			apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{Group: group, Now: a.clock.Now, Extra: c.extra})(r)
 		})
 	})
 	a.handler = r.Mux
@@ -1138,8 +1714,8 @@ func newApp(t *testing.T, opts ...func(*apphttp.InjectHTTPRouterOptions)) *app {
 	return a
 }
 
-// signIn the given user by putting them in a session of the app's own session manager, which is what
-// signing in does, and return the session's cookie.
+// signIn the given user by putting them in a session of the app's session manager, and return the
+// session's cookie.
 func (a *app) signIn(t *testing.T, user model.User) *http.Cookie {
 	t.Helper()
 

@@ -1,7 +1,9 @@
 package html_test
 
 import (
+	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,10 +44,75 @@ func TestGroupPage(t *testing.T) {
 		is.True(t, !strings.Contains(page, "<a "), page)
 	})
 
-	t.Run("says that a request failed in a place that is hidden until one does", func(t *testing.T) {
-		page := render(t, html.GroupPage(html.GroupPageProps{GroupName: "The Loft", Now: now}))
+	t.Run("says that a request failed in a place that is hidden until one does, and turns the buttons of what is being sent off meanwhile", func(t *testing.T) {
+		doc, err := nethtml.Parse(strings.NewReader(render(t, html.GroupPage(html.GroupPageProps{GroupName: "The Loft", Now: now}))))
+		is.NotError(t, err)
 
-		is.True(t, regexp.MustCompile(`<p id="request-failed" role="alert" class="[^"]*\bhidden\b[^"]*"[^>]*data-class="\{hidden: !\$_failed\}"[^>]*>That did not go through\. Check your connection and try again\.</p>`).MatchString(page), page)
+		var found int
+		for n := range doc.Descendants() {
+			if n.Type != nethtml.ElementNode || attribute(n, "id") != "request-failed" {
+				continue
+			}
+			found++
+
+			is.Equal(t, "p", n.Data)
+			is.Equal(t, "alert", attribute(n, "role"))
+			is.Equal(t, "That did not go through. Try again, and reload the page if it keeps happening.", n.FirstChild.Data)
+
+			// Hidden from the start, and shown by the signal that the listener sets.
+			is.True(t, slices.Contains(strings.Fields(attribute(n, "class")), "hidden"), attribute(n, "class"))
+			is.Equal(t, `{"_failed":false}`, attribute(n, "data-signals"))
+			is.Equal(t, "{hidden: !$_failed}", attribute(n, "data-class"))
+
+			listener := attribute(n, "data-on:datastar-fetch")
+			for _, part := range []string{
+				"if (type === 'started') { $_failed = false; buttons.forEach(b => b.disabled = true) }",
+				"else if (type === 'finished') { buttons.forEach(b => b.disabled = false) }",
+				"else if (type === 'error' || type === 'retries-failed') { $_failed = true }",
+				"buttons = evt.detail.el.querySelectorAll('button')",
+			} {
+				is.True(t, strings.Contains(listener, part), listener)
+			}
+		}
+		is.Equal(t, 1, found)
+	})
+
+	t.Run("sends every form through Datastar as a form, once, to the path the form itself posts to, and never as a GET", func(t *testing.T) {
+		post := model.TimelinePost{Post: model.Post{ID: "p_1", Created: model.Time{T: now}, Body: "Cake"}, AuthorName: "Signe"}
+		page := render(t, html.GroupPage(html.GroupPageProps{
+			GroupName: "The Loft",
+			Now:       now,
+			Timeline:  model.Timeline{Days: []model.TimelineDay{{Date: model.DateOf(now), Today: true, Posts: []model.TimelinePost{post}}}},
+			Earlier:   html.EarlierPostsProps{Next: "abc"},
+		}))
+		doc, err := nethtml.Parse(strings.NewReader(page))
+		is.NotError(t, err)
+
+		var forms []string
+		for n := range doc.Descendants() {
+			if n.Type != nethtml.ElementNode {
+				continue
+			}
+			for _, a := range n.Attr {
+				is.True(t, !strings.Contains(a.Val, "@get("), a.Val)
+			}
+			if n.Data != "form" {
+				continue
+			}
+			forms = append(forms, attribute(n, "action"))
+			is.Equal(t, "post", attribute(n, "method"))
+
+			// The form that opens the comments is sent by the element around it, when that opens.
+			if attribute(n, "action") == "/comments/open" {
+				is.Equal(t, "", attribute(n, "data-on:submit"))
+				is.Equal(t, "details", n.Parent.Data)
+				is.Equal(t, n.Parent.Attr[0].Val+"-open", attribute(n, "id"))
+				is.Equal(t, "el.open && @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'})", attribute(n.Parent, "data-on:toggle"))
+				continue
+			}
+			is.Equal(t, "@post('"+attribute(n, "action")+"', {contentType: 'form', retryMaxCount: 0, requestCancellation: 'disabled'})", attribute(n, "data-on:submit"))
+		}
+		is.EqualSlice(t, []string{"/posts", "/comments/open", "/comments", "/posts/earlier"}, forms)
 	})
 
 	t.Run("shows any body that can be posted as exactly that text, in a post, in a comment, and in a field, and never as an element", func(t *testing.T) {
@@ -60,7 +127,8 @@ func TestGroupPage(t *testing.T) {
 					Timeline:  model.Timeline{Days: []model.TimelineDay{{Date: model.DateOf(now), Today: true, Posts: []model.TimelinePost{post}}}},
 					Composer:  html.ComposerProps{Body: body, Message: "Refused."},
 				}),
-				html.Comments(html.CommentsProps{PostID: "p_1", Comments: []model.TimelineComment{comment}, Now: now, Form: html.CommentFormProps{Body: body, Message: "Refused."}}),
+				html.Comments(html.CommentsProps{PostID: "p_1", Comments: []model.TimelineComment{comment}, Now: now}),
+				html.CommentForm(html.CommentFormProps{PostID: "p_1", Body: body, Message: "Refused."}),
 			})
 
 			doc, err := nethtml.Parse(strings.NewReader(page))
@@ -100,6 +168,11 @@ func TestGroupPage(t *testing.T) {
 					continue
 				}
 
+				// The page also has the empty field for a comment under the post.
+				if n.Data == "textarea" && n.FirstChild == nil {
+					continue
+				}
+
 				if n.FirstChild == nil || n.FirstChild != n.LastChild || n.FirstChild.Type != nethtml.TextNode {
 					ht.Fatalf("the body %q did not come out as one piece of text in %v", body, n.Data)
 				}
@@ -118,6 +191,16 @@ func TestGroupPage(t *testing.T) {
 			}
 		})
 	})
+}
+
+// attribute of the given element with the given name, or empty if it has none.
+func attribute(n *nethtml.Node, key string) string {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return a.Val
+		}
+	}
+	return ""
 }
 
 // markup is text made of pieces of HTML that try to become elements, attributes, or comments, mixed
@@ -174,8 +257,7 @@ func TestPrivatePage(t *testing.T) {
 		page := render(t, html.PrivatePage(html.PrivatePageProps{}))
 
 		is.True(t, strings.Contains(page, "<title>regroup</title>"), page)
-		is.True(t, regexp.MustCompile(`<h1[^>]*>This group is private\.</h1>`).MatchString(page), page)
-		is.True(t, !strings.Contains(page, "<main"), page)
+		is.True(t, regexp.MustCompile(`<main><div[^>]*><div[^>]*><div[^>]*>regroup</div><h1[^>]*>This group is private\.</h1></div></div></main>`).MatchString(page), page)
 		is.True(t, !strings.Contains(page, "<a "), page)
 		is.True(t, !strings.Contains(page, "<form"), page)
 	})
@@ -183,7 +265,7 @@ func TestPrivatePage(t *testing.T) {
 	t.Run("puts what it is given under the sign", func(t *testing.T) {
 		page := render(t, html.PrivatePage(html.PrivatePageProps{Extra: A(Href("/somewhere"), Text("Somewhere"))}))
 
-		is.True(t, strings.Contains(page, `<p><a href="/somewhere">Somewhere</a></p>`), page)
+		is.True(t, regexp.MustCompile(`<p[^>]*><a href="/somewhere">Somewhere</a></p></main>`).MatchString(page), page)
 	})
 }
 
@@ -204,14 +286,37 @@ func TestTimelineDay(t *testing.T) {
 		t.Run("heads "+test.name, func(t *testing.T) {
 			section := render(t, html.TimelineDay(test.day, now))
 
-			heading := regexp.MustCompile(`<h2[^>]*>(.*)</h2>`).FindStringSubmatch(section)
+			heading := regexp.MustCompile(`<h2 id="day-` + test.day.Date.String() + `-heading"[^>]*>(.*)</h2>`).FindStringSubmatch(section)
 			is.True(t, heading != nil, section)
 			is.Equal(t, test.expected, regexp.MustCompile(`<[^>]*>`).ReplaceAllString(heading[1], ""))
+
+			// The heading alone is the same heading.
+			is.True(t, strings.Contains(section, render(t, html.DayHeading(test.day, now))), section)
 		})
 	}
 }
 
 func TestComments(t *testing.T) {
+	t.Run("fades in when they are put on the page, and only for someone who has not asked for less motion", func(t *testing.T) {
+		list := render(t, html.Comments(html.CommentsProps{PostID: "p_1", Now: now, Comments: []model.TimelineComment{
+			{Comment: model.Comment{ID: "c_1", Created: model.Time{T: now}, Body: "Hello"}, AuthorName: "Signe"},
+		}}))
+		is.True(t, regexp.MustCompile(`<div id="post-p_1-comments"><ol class="[^"]*\bmotion-safe:animate-fade-in\b[^"]*">`).MatchString(list), list)
+
+		// Nothing else on any page moves.
+		for _, path := range []string{"common.go", "group.go"} {
+			source, err := os.ReadFile(path)
+			is.NotError(t, err)
+			for _, class := range regexp.MustCompile(`[\w:-]*(?:animate|transition|duration)-[\w-]*`).FindAllString(string(source), -1) {
+				is.Equal(t, "motion-safe:animate-fade-in", class)
+			}
+		}
+	})
+
+	t.Run("is an empty place when there are no comments", func(t *testing.T) {
+		is.Equal(t, `<div id="post-p_1-comments"></div>`, render(t, html.Comments(html.CommentsProps{PostID: "p_1", Now: now})))
+	})
+
 	t.Run("shows the time of a comment alone when it is from today, and with its day when it is not", func(t *testing.T) {
 		at := func(t time.Time) model.TimelineComment {
 			return model.TimelineComment{Comment: model.Comment{ID: "c_1", Created: model.Time{T: t}, Body: "Hello"}, AuthorName: "Signe"}
@@ -233,13 +338,14 @@ func TestComments(t *testing.T) {
 }
 
 func TestEarlierPosts(t *testing.T) {
-	t.Run("sends the cursor in the body of a post, and has no button at the end of the timeline", func(t *testing.T) {
-		form := render(t, html.EarlierPosts("abc"))
+	t.Run("sends the cursor and the days in the body of a post, and has no button at the end of the timeline", func(t *testing.T) {
+		form := render(t, html.EarlierPosts(html.EarlierPostsProps{Next: "abc", Days: []model.Date{{Year: 2031, Month: 3, Day: 14}, {Year: 2031, Month: 3, Day: 13}}}))
 		is.True(t, strings.Contains(form, `<form id="earlier" method="post" action="/posts/earlier"`), form)
 		is.True(t, strings.Contains(form, `<input type="hidden" name="after" value="abc">`), form)
+		is.True(t, strings.Contains(form, `<input type="hidden" name="days" value="2031-03-14,2031-03-13">`), form)
 		is.True(t, regexp.MustCompile(`<button type="submit"[^>]*>Earlier posts</button>`).MatchString(form), form)
 
-		form = render(t, html.EarlierPosts(""))
+		form = render(t, html.EarlierPosts(html.EarlierPostsProps{Days: []model.Date{{Year: 2031, Month: 3, Day: 14}}}))
 		is.True(t, strings.Contains(form, `<form id="earlier"`), form)
 		is.True(t, !strings.Contains(form, "<button") && !strings.Contains(form, "<input"), form)
 	})
