@@ -26,10 +26,16 @@ What the group page needs before anyone can use it. Agreed with Markus on 2026-1
 - All members see the list of members with their names and roles. Only admins see members' email addresses. Moderators and admins see the addresses of invitations that are waiting.
 - There is always at least one admin. It follows from the rule that nobody changes their own role.
 - The preview sends no email. It shows what would have been sent on a page that only the preview build has.
+- Someone who is not signed in sees "This group is private." and a field to ask for a sign-in link. The page does not name the group. The pages that a working link opens do name it, since the email already did.
+- After asking for a link, everyone gets the same sentence, whether or not the address belongs to a member.
+- The pages for people are plain forms that work without JavaScript, because a link in an email may open in any browser.
+- The member count on the sign links to the list of members, where moderators and admins invite, and admins change roles. "Sign out" sits beside the person's name on the sign.
 - The work is split across builders: the rules and emails first, then the pages (asking for a link, the page a link opens, accepting an invitation, the list of members with inviting and roles, and signing out).
 
 ## Open
 
 - Removing a member. It belongs with moderation: the core values make it a last resort that the group can see.
 - A page where an admin edits the group's name and other settings.
-- What the emails say, and in which voice. The in-app voice is still undecided.
+- What the emails say, and in which voice. The in-app voice is still undecided. The first wording is in step 2 of `docs/diary/2026-11-26-people.md`.
+- A limit per visitor on asking for sign-in links. Today every request makes a job, and anyone can use up a member's five links an hour and keep them out for up to an hour.
+- How a former member comes back. Their address cannot be invited again for now.
