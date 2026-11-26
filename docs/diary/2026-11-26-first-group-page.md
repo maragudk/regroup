@@ -288,3 +288,110 @@ Validate with `make lint`, `make test`, and `go test -race -shuffle on -tags sql
 - For bombadil: sign in at `/preview`. "Switch person" is a link it can follow, which changes who it is. A failed request shows `#request-failed` without the class `hidden`.
 - An idempotency token for posts and comments, so that trying again cannot post twice.
 - A favicon, once there is a logo.
+
+## Step 4: A round of fixes to the group page
+
+**Author:** builder
+
+### Prompt Context
+
+**Verbatim prompt:** The lead's brief, which opens: "You are the third builder on regroup's group page: a round of fixes to what the first two builders left. Each fix proves itself: plant the fault, show that the new test fails, take the fault out."
+**Interpretation:** Nine items: serve Fraunces as the upstream TrueType file, add a favicon, make "Try again" unable to post twice, check a comment's post before its body, refuse bodies with no visible character in general, correct a doc comment, move focus and announce changes for screen readers, handle Datastar's uncaught `FetchFailed`, and bring the to-do notes up to date. Each with tests that fail without the fix.
+**Inferred intent:** Close the loose ends step 3 listed for the lead, so that the page Markus judges on the preview is honest about what it does, and leave the next builder (stateful hegel tests) a store and a router whose rules hold for repeated submissions too.
+
+### What I did
+
+1. **Fraunces.** `/public/styles/fonts/Fraunces.ttf` is the upstream `Fraunces[SOFT,WONK,opsz,wght].ttf` at commit `7ccdec31`, unchanged (sha256 `0776a870a0856b296e11639505ac0cf9be5e7800bb1849dfa21a1bd182455fc0`), pinned in `TestFonts` in `/html/common_test.go`. The home-made `Fraunces.woff2` is gone. The `fonts` target in `/Makefile` only downloads. `/tailwind.css` loads it as `format("truetype")`, `/html/common.go` preloads it as `font/ttf`, and the Dockerfile's stylesheet check allows `.ttf`. Sizes: 210,032 bytes before (WOFF2), 384,052 after (TTF).
+2. **Favicon.** `/public/favicon.svg` (a 32 by 32 square filled `#ff6900`) and `/public/favicon.ico` (one 32 by 32 PNG of the same colour, made by a throwaway Go program in the scratchpad), both served by glue's static files at the root. Every page links the SVG. `TestFavicon` checks the link, the SVG, every pixel of the ICO, and that glue's `http.Static` serves both.
+3. **Posting twice.** `model.FormToken`, `model.NewFormToken`, and `model.ParseFormToken` in `/model/form.go`, with `FuzzParseFormToken`. Migration `/sqlite/migrations/1795713000-form-tokens.up.sql` adds a nullable `form_token` to `posts` and `comments`, with a unique index on `(author_id, form_token)` and a check that it is not empty. `sqlite.Database.CreatePost` and `CreateComment` take the token and return what the author made with it before, inside the same transaction. New `sqlite.Database.GetPost`, `GetPostByFormToken`, and `GetCommentByFormToken`. `service.Fat.CreatePost` and `CreateComment` take the token as a string, parse it, and return the first result for a token already used before cleaning the body. `http.InjectHTTPRouterOptions.Random` is the randomness (`crypto/rand.Reader` in `/cmd/app/main.go`, ChaCha8 with a zero seed in the tests); every rendered composer and comment form carries a new token in a hidden `token` field.
+4. **Comment order.** `service.Fat.CreateComment` checks the post with `GetPost` before cleaning the body.
+5. **Invisible bodies.** `visible` in `/model/post.go`.
+6. **Doc comment.** `service.Fat.GetTimeline` now says a later page keeps the first page's marks only until the user looks again.
+7. **Accessibility.** `html.Announcement` is a polite live region (`#announcement`, `role="status"`, `aria-live="polite"`, `sr-only`) on every group page. Patches put the words in a span named after what they are about, so that the same words about something new are said again. The first post loaded by "Earlier posts" gets `tabindex="-1"` and a `data-init` that focuses it, unless the person put the focus in a field or on another control while waiting.
+8. **FetchFailed.** Every Datastar expression that sends a form ends in `.catch(() => $_failed = true)`.
+9. **Bookkeeping.** `/docs/todo/group-page.md` and `/docs/todo/verification.md`.
+
+Decided by me, for the lead and Markus to overrule:
+
+- The font file is named `Fraunces.ttf`, not the upstream name with brackets and commas, so that its URL needs no escaping. Its bytes are upstream's.
+- The favicon colour is `#ff6900`, which is Tailwind's orange 500, `oklch(70.5% 0.213 47.604)`, in sRGB, as Tailwind gives it. A hex value, not oklch, so that every browser draws it. The ICO's bits-per-pixel field says 24, matching its PNG.
+- A token is 16 random bytes as 22 URL-safe base64 characters, and only the canonical encoding parses. A token belongs to its author: the same token from someone else makes something new.
+- A form without a token, or with one that is not one, is a request the page could not have sent: 400 with the plain "That did not work" page, with or without Datastar, and nothing made.
+- A repeat returns the first result whatever it carries now, as the brief says: a changed body, an empty one, even another post for a comment. The service looks the token up before anything about the body, and the store looks again inside its transaction so that two sends at once still make one row. Recorded under "Known and not fixed", since it loses an edited retry silently.
+- A refused body uses no token, and the refused form comes back with a new one anyway: every rendered form gets a fresh token.
+- A comment sent again is answered with the comments of the post it was made on.
+- The rule for a visible character: not white space; not a default-ignorable code point (format characters, variation selectors, the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0, the combining grapheme joiner, the Khmer inherent vowels, and the code points Unicode keeps for more); not another format character, except the prepended concatenation marks such as the Arabic number sign, which are drawn; and not one of the characters fonts draw blank though Unicode does not class them as ignorable (U+2800 Braille pattern blank, U+1D159 musical null notehead, U+13441 and U+13442 Egyptian full and half blank, U+16FE4 Khitan filler). A lone combining mark, a private-use character, and an unassigned code point count as visible, since browsers draw them as something.
+- Wording for screen readers: "Your post is on the timeline.", "Your comment was added.", "Loaded 20 earlier posts.", "Loaded 1 earlier post.", with " There are no posts before these." (or "before it.") on the last page, and "There are no earlier posts." for an empty page. Opening comments says nothing.
+- The focus goes to the whole article of the first post loaded, which the global focus ring outlines. Posting and commenting move no focus.
+- The `.catch` sets the same signal as a failed request, so a request that cannot be sent shows the failure bar, and so does any other rejection of the action.
+- On the brief's "CI does not check the built stylesheet": CI's build job does build the Docker image, which runs the Dockerfile's check that the built stylesheet names no other host. What CI does not do is check anything else in the built file. I wrote that in `/docs/todo/verification.md`.
+
+### Why
+
+The brief asked for each loose end of step 3 to be closed with a test that fails without the fix. The token is the one with design weight: the server cannot tell a lost answer from a new post, so the page has to say which form a submission came from, and the store has to keep the answer to it.
+
+### What worked
+
+- A pixel comparison for the font. I ran the preview build at `:28431` with a scratch database, signed in as Markus, and screenshot the page at 1440 by 900 with the WOFF2, then again on the same database with the TTF: 0 of 1,296,000 pixels differed. As a control, the same page with the softness set to 0 through the CSSOM differed in 18,843 pixels, so the comparison sees a change in softness. Computed styles were the same in both: Fraunces at weight 620 for the sign and days, 640 for names, `"SOFT" 100, "WONK" 0`. The TTF is served as `font/ttf`, 384,052 bytes, without content encoding.
+- Showing each fault in the browser with the old build, then not with the new one, on the same database:
+  - Lost answer (Playwright route that fetches the real response, then aborts it): old build, "Try again" made a second post (8 articles, then 10 after a reload); new build, one (10, then 11 after a reload).
+  - A request that cannot be sent (route aborted): old build logged `pageerror: FetchFailed`; new build logged only the browser's own `Failed to load resource: net::ERR_FAILED`, with the failure bar shown, for both a post and opening comments.
+  - The favicon 404 is gone: page load logs nothing.
+- Keyboard check: Tab to "Earlier posts", Enter. Focus landed on the first loaded post (`:focus-visible` true, even on the last page where the button goes away), the next Tab went to its "Comment", and the live region read "Loaded 16 earlier posts. There are no posts before these." With the request slowed and the focus moved into the composer meanwhile, the focus stayed in the composer.
+- Planted faults, each failing as shown and passing again once removed:
+  - Font: one byte of the TTF changed. `TestFonts`: `Expected "0776a870…", but got "3fee7c68…"`.
+  - Favicon: the link removed (`TestFavicon/every_page_links_to_the_SVG_icon`: `Not true`); an ICO of green 0x6a (`Expected "{255 105 0 255}", but got "{255 106 0 255}"`).
+  - Invisible bodies: before the fix, the new table cases failed with `Expected "body empty" … but got "<nil>"` for the Hangul fillers, the Braille blank, variation selectors and the CGJ, unassigned default-ignorables, and the Khmer vowels, and the Arabic number sign was refused as empty. The old property found `"ㅤ"` (U+3164) at once: `failure: accepted "ㅤ", which has nothing visible`. After the fix, removing `Other_Default_Ignorable_Code_Point` from `visible` failed four table cases and the property; dropping the four extra blanks failed their case.
+  - Token parsing: the canonical check removed. `TestParseFormToken/refuses_a_token_with_a_line_break_in_it` and `FuzzParseFormToken/seed#3`: `accepted "q6urq6urq6u\nrq6urq6urqw"`.
+  - Store: the lookup in `CreatePost` removed. Three tests failed with `UNIQUE constraint failed: posts.author_id, posts.form_token`, including the concurrent one and the hegel property; the same for comments. A non-unique index in the migration: the schema test failed with `Not true … <nil>`.
+  - Comment order: the post check moved after cleaning. `TestFat_CreateComment/refuses_a_post_that_does_not_exist,_before_anything_about_the_body`: `Expected "post not found" (type model.Error), but got "body empty"`. That is the original fault.
+  - Service: the token lookup skipped. `TestFat_CreatePost_again`: `Expected nil error, but got "body empty"`.
+  - Router: a fresh token passed to the service instead of the one sent (`Expected "Cake.", but got "Cake!"`, the 400 test got 200, and the property failed); the composer keeping the sent token (`the composer kept the token that was sent`); tokens read from another reader than `Random` (`Expected "2Yd-zm02iqwab0GexifHaw", but got "bm90IHRoZSBpbmplY3RlZA"`).
+  - Accessibility: no focus on earlier posts (`Expected "1", but got "0"`); focus not reset after the first patch (`Expected slice of length 1, but got 2`); focus not passed to a new day (`Expected slice of length 1, but got 0`); no announcement after a post (`Expected "1", but got "0"`); a constant announcement key (`Expected "1", but got "0"`).
+  - FetchFailed: `sent` emptied. `TestGroupPage/sends_every_form…` failed on the expression without `.catch`.
+
+### What didn't work
+
+- My first edit of `/html/common_test.go` used `String.prototype.replace` with replacement strings holding a dollar sign followed by a backtick, which JavaScript expands to the text before the match. The file grew by 206 lines and failed with `html/common_test.go:213:39: expected operand, found '>'`. I checked it out again and redid the edits with function replacements.
+- `playwright-cli eval` was refused: "this command runs a string through eval, which can't be verified to stay inside the worktree". `run-code` with `page.evaluate` works, but only from the worktree as working directory, and its sandbox has no `setTimeout` ("Session closed"); `page.waitForTimeout` works.
+- The first CSSOM control with `page.addStyleTag` gave 0 differing pixels: the content security policy blocks inline styles. Setting `style` through the CSSOM is not blocked.
+- Scripts with a backslash-u escape in them were not run ("contains a \uXXXX escape"). I wrote `@u` and turned it into the escape when writing the file.
+- `hegel`: `*rand.Rand` from `math/rand/v2` has no `Read`; `rand.ChaCha8` does.
+- The old timeline migration test made a post right after migrating to `1795703426-timeline`, which now fails with `no such column: form_token`. It migrates all the way up first now.
+- `TestTimeline_comments/answers_with_text_even_when…` sent a comment on a post that does not exist to see an invalid body echoed. With the post checked first that is 404 (`Expected "200", but got "404"`), so it comments on a real post now.
+- CI failed on the first push: `go mod tidy && git diff --exit-code go.mod go.sum` wanted `github.com/go-chi/chi/v5` as a direct requirement, because `TestFavicon` imported it. After review the test takes the mux from `gluehttp.NewRouter`, and chi is indirect again.
+- `golangci-lint`: `QF1001: could apply De Morgan's law` in the fuzz test. Rewritten with `strings.Trim`.
+
+### What I learned
+
+- Datastar 1.0.3's actions are async, and a compiled expression returns the action's promise. When `fetch` throws, the retry loop dispatches `retries-failed` (with `retryMaxCount: 0`) and rejects, and the action rethrows as `FetchFailed`. Nothing awaits the promise, so it is an unhandled rejection. A `.catch` in the expression handles it; Datastar rewrites `$_failed` to `$['_failed']`, which can be assigned in the arrow.
+- glue's static files serve any `/name.ext` at the root from `public/`, but only `/images`, `/scripts`, and `/styles` take a hashed name, because the route is matched before the middleware strips the hash.
+- glue opens SQLite with `_txlock=immediate`, so a lookup and an insert in one `InTx` cannot race.
+- Disabling a focused button blurs it in Chrome, which is why the focus falls to the page after posting by keyboard.
+- Go's PNG encoder writes an opaque image as RGB without alpha, whatever the image type.
+
+### What was tricky
+
+- Deciding what "the first result" means when the repeat differs. The brief says return the first result, so a changed body is dropped. The service has to look the token up before cleaning, or a repeat whose text was emptied would be refused instead.
+- Finding where focus goes when the button that asked for earlier posts disappears, and not taking the focus from someone who has moved on while waiting.
+- Keeping the oracle of the visible-character property apart from the code: the default-ignorable ranges, the white space, the drawn blanks, and the prepended concatenation marks are written out in the test from Unicode's data files.
+
+### What warrants review
+
+Self-review: two competing reviewers on the diff and one adversarial reviewer given the code and contracts but not the tests. I fixed what they agreed on, and some single findings that were cheap:
+
+- Both: the comments that looked outward (the migration named the preview's seed, the service named a browser tab, `PostsProps.Focus` named its caller, `visible` named `cleanBody`); the exported single-use `AnnouncementID` and the test's single-use `whiteSpace`; the old author indexes made redundant by the new unique ones, now dropped in the migration and restored by its down; the router's doc comment, which said nothing about tokens; the undocumented and untested panic without `Random`; tokens in the router property drawn from `crypto/rand` (now drawn by hegel, so a failure replays); the favicon test needing chi.
+- One reviewer, fixed: the migration's timestamp was in the future (renamed `1795713000`); the ICO's header said 32 bits for a 24-bit PNG; no test for focus under a new day heading or for announcement keys; the `submission` generator's comment promised empty tokens it never drew; the migration test inserted no comment and re-read nothing; no schema test for the unique index or the empty-token check; no concurrent comment test; the oracle copied the prepended-concatenation-mark rule; focus taken from a field; more characters drawn blank.
+- Both, not changed, for the lead: an edited retry is dropped silently. That is what the brief asked for, so I recorded it under "Known and not fixed" in `/docs/todo/group-page.md` rather than change it. Markus may prefer the retry to keep the new text with a message.
+- Both, not changed: "Created post" is logged when a send loses the race inside the store. Two sends with one token at once need a crafted request, since the button is off while a request is on its way.
+- Not changed, recorded in `/docs/todo/group-page.md`: the composer is replaced before the post is added, so an answer that breaks off between the two leaves an empty field, no post, and a new token; a repeated post is drawn without the comments it got meanwhile; the TTF goes out uncompressed because glue's compression does not cover `font/ttf`; focus falls to the page after posting or commenting by keyboard.
+- Not changed: the live region keeps its last words until the next announcement; `PostsProps.Token` is a function, so rendering the same props twice gives different tokens.
+- Unverified: whether Firefox restores a hidden `token` on reload despite `no-store`. If it did, a page reloaded after a lost answer could carry a used token.
+
+Validate with `make lint`, `make test`, and `go test -race -shuffle on -tags sqlite_fts5,sqlite_math_functions,sqlite_foreign_keys ./...`. Fuzz with `go test ./model/ -run '^$' -fuzz '^FuzzParseFormToken$'` and `go test ./http/ -run '^$' -fuzz '^FuzzTimeline$'`. On the preview, write a post, cut the network after it is sent, and press Post again: one post.
+
+### Future work
+
+- For the stateful hegel builder: `newApp` now reads tokens from ChaCha8 with a zero seed, so the tokens of a run are the same every time. `a.post` adds a fresh token to a form for `/posts` and `/comments` unless the form has a `token` key; give one to model repeats. Draw tokens with `hegel.Binary(16, 16)` and `model.NewFormToken` so that failures replay. The model of a person needs the tokens they have used and what each made: a used token returns the first post or comment whatever is sent, a refused body uses no token, and an empty or malformed token is 400 with nothing made. Reset between cases by deleting `comments` and `posts`.
+- Return the post before the composer in the answer to a post, and make adding it idempotent on the page.
+- Decide with Markus what an edited retry should do.
