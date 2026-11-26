@@ -1,0 +1,554 @@
+// What the checks in spec.ts read from the group page, and what they keep in the browser between
+// states. Everything here runs in the page, called from the extractors and custom actions in spec.ts.
+//
+// The page has stable markers for most of what is read here (see step 3 of
+// docs/diary/2026-11-26-first-group-page.md). Three things have none yet, and are found by the
+// page's structure, in this file only: the name of the person signed in, the name of a post's author,
+// and the name of a comment's author.
+
+// ---- What is on the page ----
+
+export type PagePost = {
+  id: string;
+  author: string;
+  body: string;
+  // The body holds elements, so it was not shown as text.
+  markup: boolean;
+  // The post itself carries a "new" mark, as opposed to its count of comments.
+  marked: boolean;
+  datetime: string;
+};
+
+export type PageComment = {
+  id: string;
+  author: string;
+  body: string;
+  markup: boolean;
+  marked: boolean;
+};
+
+export function isPrivatePage(document: Document): boolean {
+  return document.querySelector("h1")?.textContent?.trim() === "This group is private.";
+}
+
+export function isGroupPage(document: Document): boolean {
+  return document.getElementById("timeline") !== null && document.getElementById("composer") !== null;
+}
+
+// groupName on the sign of the group page.
+export function groupName(document: Document): string | null {
+  return isGroupPage(document) ? (document.querySelector("header h1")?.textContent?.trim() ?? null) : null;
+}
+
+// personName of whoever the group page is for, which the sign shows beside "Switch person".
+export function personName(document: Document): string | null {
+  if (!isGroupPage(document)) return null;
+  return document.querySelector("header .ml-auto > span:first-child")?.textContent ?? null;
+}
+
+function bodyOf(element: Element | null): { body: string; markup: boolean } {
+  const body = element?.querySelector("[data-body]");
+  return { body: body?.textContent ?? "", markup: (body?.childElementCount ?? 0) > 0 };
+}
+
+export function posts(document: Document): PagePost[] {
+  return Array.from(document.querySelectorAll("#timeline article[data-post]")).map((article) => ({
+    id: article.getAttribute("data-post") ?? "",
+    author: article.querySelector("h3")?.textContent ?? "",
+    ...bodyOf(article.querySelector(":scope > div:last-child")),
+    marked: Array.from(article.querySelectorAll('[data-mark="new"]')).some((mark) => mark.closest("details") === null),
+    datetime: article.querySelector("time")?.getAttribute("datetime") ?? "",
+  }));
+}
+
+export function comments(document: Document, postID: string): PageComment[] {
+  const list = document.getElementById("post-" + postID + "-comments");
+  if (!list) return [];
+  return Array.from(list.querySelectorAll("li[data-comment]")).map((item) => ({
+    id: item.getAttribute("data-comment") ?? "",
+    author: item.querySelector(":scope > p:first-child > span:first-child")?.textContent ?? "",
+    ...bodyOf(item),
+    marked: item.querySelector('[data-mark="new"]') !== null,
+  }));
+}
+
+// summary of a post's comments: how many it says there are, and how many it says are new.
+export function summary(document: Document, postID: string): { count: number | null; fresh: number } {
+  const element = document.getElementById("post-" + postID + "-comments-summary");
+  if (!element) return { count: null, fresh: 0 };
+  const label = element.querySelector(":scope > span:first-child")?.textContent?.trim() ?? "";
+  let count: number | null = null;
+  if (label === "Comment") count = 0;
+  else if (/^\d+ comments?$/.test(label)) count = parseInt(label, 10);
+  const mark = element.querySelector('[data-mark="new"]')?.textContent?.trim() ?? "";
+  return { count, fresh: /^\d+ new$/.test(mark) ? parseInt(mark, 10) : 0 };
+}
+
+export function isShown(window: Window, element: Element | null): boolean {
+  if (!element) return false;
+  const style = window.getComputedStyle(element);
+  return style.display !== "none" && style.visibility !== "hidden";
+}
+
+// ---- What the server keeps of a body ----
+
+export type Cleaned = { body: string } | { refused: string };
+
+// clean a body by the rules of model.CleanPostBody and model.CleanCommentBody, as the browser sends it.
+// The browser sends a lone surrogate as U+FFFD. Go's unicode.IsSpace is the White_Space property, and
+// unicode.IsControl is the Cc category.
+export function clean(raw: string, maxLength: number): Cleaned {
+  let body = raw.toWellFormed().replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  body = body.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+  if (!/[^\p{White_Space}\p{Cf}]/u.test(body)) return { refused: "empty" };
+  if (/\p{Cc}/u.test(body.replace(/[\n\t]/g, ""))) return { refused: "invalid" };
+  if ([...body].length > maxLength) return { refused: "too long" };
+  return { body };
+}
+
+// ---- What is kept in the browser ----
+
+// The person is signed in, as far as this browser tab knows. Session storage outlives the page, but not
+// the tab, and a run has one tab. It is set when a sign-in form is sent, and cleared on signing out.
+export const signedInKey = "regroup-bombadil-signed-in";
+
+// Names of the group and of the people in it, as seen on pages for someone signed in, and on the
+// preview's list of people. Local storage outlives the page, so the private page can be checked for them.
+const namesKey = "regroup-bombadil-names";
+
+export type Known = { groups: string[]; people: string[] };
+
+export function known(window: Window): Known {
+  try {
+    return JSON.parse(window.localStorage.getItem(namesKey) ?? "") as Known;
+  } catch {
+    return { groups: [], people: [] };
+  }
+}
+
+function learn(window: Window, groups: string[], people: string[]) {
+  const k = known(window);
+  const next = {
+    groups: [...new Set([...k.groups, ...groups.filter((n) => n.trim() !== "")])],
+    people: [...new Set([...k.people, ...people.filter((n) => n.trim() !== "")])],
+  };
+  if (next.groups.length !== k.groups.length || next.people.length !== k.people.length) {
+    window.localStorage.setItem(namesKey, JSON.stringify(next));
+  }
+}
+
+// A request the page sent, and what the page must show once its answer has come.
+type Pending = {
+  what: string;
+  // ID of the element that sent it: the form, or the details of a post's comments.
+  element: string;
+  sent: number;
+  started: boolean;
+  // Something was typed into the form after it was sent.
+  typed: boolean;
+  check: (typed: boolean) => string[];
+};
+
+export type Recorder = {
+  pending: Pending[];
+  // Each answer whose page did not show what it should, with why.
+  wrong: string[];
+  // Each request that failed, as Datastar tells the page.
+  failed: string[];
+  // Each content security policy violation.
+  violations: string[];
+};
+
+declare global {
+  interface Window {
+    regroupBombadil?: Recorder;
+  }
+}
+
+// recorder of this page, set up on the first call. The extractors call it on every state, so it is set
+// up on the first state of a page, before any action on it.
+export function recorder(window: Window): Recorder {
+  if (window.regroupBombadil) return window.regroupBombadil;
+
+  const document = window.document;
+  const r: Recorder = { pending: [], wrong: [], failed: [], violations: [] };
+  window.regroupBombadil = r;
+
+  const expect = (what: string, element: string, check: (typed: boolean) => string[]) => {
+    r.pending.push({ what, element, sent: Date.now(), started: false, typed: false, check });
+  };
+
+  document.addEventListener(
+    "submit",
+    (event) => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement)) return;
+
+      if ((form.getAttribute("action") ?? "").endsWith("/preview/sign-in")) {
+        window.sessionStorage.setItem(signedInKey, "1");
+        return;
+      }
+
+      const raw = form.querySelector("textarea")?.value ?? "";
+      const me = personName(document);
+
+      if (form.id === "composer") {
+        const cleaned = clean(raw, 10_000);
+        const before = posts(document);
+        expect("post " + JSON.stringify(raw.slice(0, 200)), form.id, (typed) => checkPost(document, raw, cleaned, before, me, typed));
+        return;
+      }
+
+      const comment = /^post-(.+)-comment-form$/.exec(form.id);
+      if (comment) {
+        const postID = comment[1]!;
+        const cleaned = clean(raw, 2_000);
+        const before = comments(document, postID);
+        const count = summary(document, postID).count;
+        expect("comment " + JSON.stringify(raw.slice(0, 200)) + " on " + postID, form.id, (typed) =>
+          checkComment(document, postID, raw, cleaned, before, count, me, typed),
+        );
+        return;
+      }
+
+      if (form.id === "earlier") {
+        const before = posts(document).length;
+        expect("earlier posts", form.id, () => {
+          const after = posts(document).length;
+          const more = document.querySelector("#earlier button") !== null;
+          return after > before || !more ? [] : ["the timeline still has " + after + " posts, and still offers earlier ones"];
+        });
+      }
+    },
+    true,
+  );
+
+  document.addEventListener(
+    "toggle",
+    (event) => {
+      const details = event.target;
+      if (!(details instanceof HTMLDetailsElement) || !details.open) return;
+      const thread = /^post-(.+)-thread$/.exec(details.id);
+      if (!thread) return;
+      const postID = thread[1]!;
+      const fresh = summary(document, postID).fresh;
+      expect("opening the comments of " + postID, details.id, () => {
+        const commenting = r.pending.some((p) => p.element === "post-" + postID + "-comment-form");
+        return checkOpen(document, postID, fresh, commenting);
+      });
+    },
+    true,
+  );
+
+  document.addEventListener(
+    "input",
+    (event) => {
+      const form = (event.target as Element | null)?.closest?.("form");
+      if (!form) return;
+      for (const p of r.pending) if (p.element === form.id) p.typed = true;
+    },
+    true,
+  );
+
+  document.addEventListener("datastar-fetch", (event) => {
+    const detail = (event as CustomEvent).detail as { type: string; el: Element | null; argsRaw: unknown };
+    const element = detail.el?.id ?? "";
+    switch (detail.type) {
+      case "started": {
+        const p = r.pending.find((p) => p.element === element && !p.started);
+        if (p) p.started = true;
+        break;
+      }
+      case "error":
+      case "retries-failed": {
+        r.failed.push(element + ": " + detail.type + " " + JSON.stringify(detail.argsRaw ?? {}));
+        // What the page shows after a failed request is the failure bar's business, not this answer's.
+        const i = r.pending.findIndex((p) => p.element === element && p.started);
+        if (i >= 0) r.pending.splice(i, 1);
+        break;
+      }
+      case "finished": {
+        const i = r.pending.findIndex((p) => p.element === element && p.started);
+        if (i < 0) break;
+        const [p] = r.pending.splice(i, 1);
+        for (const problem of p!.check(p!.typed)) r.wrong.push(p!.what + ": " + problem);
+        break;
+      }
+    }
+  });
+
+  document.addEventListener("securitypolicyviolation", (event) => {
+    const text = event.violatedDirective + " blocked " + (event.blockedURI || "inline");
+    if (!r.violations.includes(text)) r.violations.push(text);
+  });
+  // Violations from before the recorder was set up, while the page loaded, come as buffered reports.
+  if ("ReportingObserver" in window) {
+    new window.ReportingObserver(
+      (reports) => {
+        for (const report of reports) {
+          const body = report.body as unknown as { effectiveDirective?: string; blockedURL?: string };
+          const text = body.effectiveDirective + " blocked " + (body.blockedURL || "inline");
+          if (!r.violations.includes(text)) r.violations.push(text);
+        }
+      },
+      { types: ["csp-violation"], buffered: true },
+    ).observe();
+  }
+
+  return r;
+}
+
+// overdue requests: sent more than the given time ago, and not answered.
+export function overdue(r: Recorder, millis: number): string[] {
+  const now = Date.now();
+  return r.pending
+    .filter((p) => now - p.sent > millis)
+    .map((p) => p.what + ": " + (p.started ? "no answer after " : "not sent after ") + Math.round((now - p.sent) / 1000) + "s");
+}
+
+// ---- What an answer must have left on the page ----
+
+function checkPost(document: Document, raw: string, cleaned: Cleaned, before: PagePost[], me: string | null, typed: boolean): string[] {
+  const problems: string[] = [];
+  const after = posts(document);
+  const field = document.querySelector<HTMLTextAreaElement>("#composer textarea");
+  const message = document.querySelector("#composer [role=alert]")?.textContent?.trim() ?? "";
+
+  if ("refused" in cleaned) {
+    if (message === "") problems.push("expected it refused as " + cleaned.refused + ", but no message says why");
+    if (after.length !== before.length || after[0]?.id !== before[0]?.id) problems.push("expected it refused as " + cleaned.refused + ", but the timeline changed");
+    if (!typed && field?.value !== raw.toWellFormed()) problems.push("the field no longer holds what was written, but " + JSON.stringify(field?.value?.slice(0, 200)));
+    return problems;
+  }
+
+  const body = cleaned.body;
+  const top = after[0];
+  if (message !== "") problems.push("refused with " + JSON.stringify(message));
+  if (!top) return [...problems, "the timeline is empty"];
+  if (before.some((p) => p.id === top.id)) problems.push("the top post " + top.id + " was there before");
+  if (top.body !== body) problems.push("the top post reads " + JSON.stringify(top.body.slice(0, 200)) + ", expected " + JSON.stringify(body.slice(0, 200)));
+  if (top.markup) problems.push("the top post's text has elements in it");
+  if (me !== null && top.author !== me) problems.push("the top post is by " + JSON.stringify(top.author) + ", expected " + JSON.stringify(me));
+  const same = (list: PagePost[]) => list.filter((p) => p.body === body).length;
+  if (same(after) !== same(before) + 1) problems.push(same(after) + " posts read so, and " + same(before) + " did before");
+  if (!typed && field?.value !== "") problems.push("the field still holds " + JSON.stringify(field?.value?.slice(0, 200)));
+  return problems;
+}
+
+function checkComment(
+  document: Document,
+  postID: string,
+  raw: string,
+  cleaned: Cleaned,
+  before: PageComment[],
+  count: number | null,
+  me: string | null,
+  typed: boolean,
+): string[] {
+  const problems: string[] = [];
+  const after = comments(document, postID);
+  const now = summary(document, postID).count;
+  const form = document.getElementById("post-" + postID + "-comment-form");
+  const field = form?.querySelector("textarea");
+  const message = form?.querySelector("[role=alert]")?.textContent?.trim() ?? "";
+
+  if ("refused" in cleaned) {
+    if (message === "") problems.push("expected it refused as " + cleaned.refused + ", but no message says why");
+    if (now !== count) problems.push("expected it refused as " + cleaned.refused + ", but the count went from " + count + " to " + now);
+    if (!typed && field?.value !== raw.toWellFormed()) problems.push("the field no longer holds what was written, but " + JSON.stringify(field?.value?.slice(0, 200)));
+    return problems;
+  }
+
+  const body = cleaned.body;
+  const last = after.at(-1);
+  if (message !== "") problems.push("refused with " + JSON.stringify(message));
+  if (!last) return [...problems, "the post shows no comments"];
+  if (before.some((c) => c.id === last.id)) problems.push("the last comment " + last.id + " was there before");
+  if (last.body !== body) problems.push("the last comment reads " + JSON.stringify(last.body.slice(0, 200)) + ", expected " + JSON.stringify(body.slice(0, 200)));
+  if (last.markup) problems.push("the last comment's text has elements in it");
+  if (me !== null && last.author !== me) problems.push("the last comment is by " + JSON.stringify(last.author) + ", expected " + JSON.stringify(me));
+  if (count !== null && now !== count + 1) problems.push("the count went from " + count + " to " + now);
+  if (now !== after.length) problems.push("the count says " + now + ", but " + after.length + " comments are shown");
+  const same = (list: PageComment[]) => list.filter((c) => c.body === body).length;
+  if (before.length > 0 && same(after) !== same(before) + 1) problems.push(same(after) + " comments read so, and " + same(before) + " did before");
+  if (!typed && field?.value !== "") problems.push("the field still holds " + JSON.stringify(field?.value?.slice(0, 200)));
+  return problems;
+}
+
+function checkOpen(document: Document, postID: string, fresh: number, commenting: boolean): string[] {
+  const problems: string[] = [];
+  const { count, fresh: still } = summary(document, postID);
+  const shown = comments(document, postID);
+  if (still !== 0) problems.push("the count still says " + still + " new");
+  if (count !== shown.length) problems.push("the count says " + count + ", but " + shown.length + " comments are shown");
+  const marked = shown.filter((c) => c.marked).length;
+  if (!commenting && marked !== fresh) problems.push("the count said " + fresh + " new, but " + marked + " comments are marked new");
+  return problems;
+}
+
+// ---- Rules that hold on every page ----
+
+// privacyProblems: someone not signed in sees that the group is private, and nothing of the group.
+// It also learns the names on pages for someone signed in, to look for them on the private page.
+export function privacyProblems(window: Window, document: Document): string[] {
+  const signedIn = window.sessionStorage.getItem(signedInKey) === "1";
+  const path = window.location.pathname;
+
+  if (isGroupPage(document) && signedIn) {
+    const people = [personName(document) ?? ""];
+    for (const p of posts(document)) people.push(p.author, ...comments(document, p.id).map((c) => c.author));
+    learn(window, [groupName(document) ?? ""], people);
+  }
+  const listed = Array.from(document.querySelectorAll('form[action$="/preview/sign-in"] button')).map((b) => b.textContent ?? "");
+  if (listed.length > 0) learn(window, [], listed);
+
+  const isPrivate = isPrivatePage(document);
+  const problems: string[] = [];
+  if (!signedIn && path === "/" && !isPrivate) problems.push("someone not signed in got a page at / that does not say the group is private");
+  if (!isPrivate && (signedIn || path !== "/")) return problems;
+
+  const count = (selector: string) => document.querySelectorAll(selector).length;
+  if (count("article, [data-post]") > 0) problems.push("it shows " + count("article, [data-post]") + " posts");
+  if (count("[data-comment]") > 0) problems.push("it shows " + count("[data-comment]") + " comments");
+  if (count("[data-body]") > 0) problems.push("it shows " + count("[data-body]") + " texts that someone wrote");
+
+  const text = (document.body?.innerText ?? "") + "\n" + document.title;
+  const k = known(window);
+  for (const name of [...k.groups, ...k.people]) {
+    const escaped = name.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&");
+    if (new RegExp("(?<![\\p{L}\\p{N}])" + escaped + "(?![\\p{L}\\p{N}])", "u").test(text)) problems.push("it names " + JSON.stringify(name));
+  }
+  return problems;
+}
+
+// ownNewProblems: nothing a person wrote carries a "new" mark for them.
+export function ownNewProblems(document: Document): string[] {
+  const me = personName(document);
+  if (me === null) return [];
+  const problems: string[] = [];
+  for (const p of posts(document)) {
+    if (p.author === me && p.marked) problems.push("post " + p.id + " by " + me + " is marked new for them");
+    for (const c of comments(document, p.id)) {
+      if (c.author === me && c.marked) problems.push("comment " + c.id + " by " + me + " is marked new for them");
+    }
+  }
+  return problems;
+}
+
+const dayNumber = (date: string) => Date.UTC(+date.slice(0, 4), +date.slice(5, 7) - 1, +date.slice(8, 10)) / 86_400_000;
+
+// orderProblems: days are in order, newest first, each once, and so are the posts in a day.
+export function orderProblems(document: Document): string[] {
+  const problems: string[] = [];
+  const sections = Array.from(document.querySelectorAll("#timeline section[data-day]"));
+  const days = sections.map((s) => s.getAttribute("data-day") ?? "");
+  for (let i = 1; i < days.length; i++) {
+    if (!(days[i - 1]! > days[i]!)) problems.push("day " + days[i] + " comes after day " + days[i - 1]);
+  }
+
+  const headings = sections.map((s) => s.querySelector("h2")?.textContent ?? "");
+  const today = headings.flatMap((h, i) => (h.startsWith("Today") ? [i] : []));
+  const yesterday = headings.flatMap((h, i) => (h.startsWith("Yesterday") ? [i] : []));
+  if (today.length > 1) problems.push(today.length + " days are headed Today: " + today.map((i) => days[i]).join(", "));
+  if (yesterday.length > 1) problems.push(yesterday.length + " days are headed Yesterday: " + yesterday.map((i) => days[i]).join(", "));
+  if (today.length === 1 && today[0] !== 0) problems.push("Today, " + days[today[0]!] + ", is not the first day");
+  if (today.length === 1 && yesterday.length === 1 && dayNumber(days[yesterday[0]!]!) !== dayNumber(days[today[0]!]!) - 1) {
+    problems.push("Yesterday, " + days[yesterday[0]!] + ", is not the day before Today, " + days[today[0]!]);
+  }
+
+  sections.forEach((section, i) => {
+    let previous = Infinity;
+    for (const article of Array.from(section.querySelectorAll("article[data-post]"))) {
+      const datetime = article.querySelector("time")?.getAttribute("datetime") ?? "";
+      const id = article.getAttribute("data-post");
+      if (datetime.slice(0, 10) !== days[i]) problems.push("post " + id + " from " + datetime + " is under day " + days[i]);
+      const t = Date.parse(datetime);
+      if (t > previous) problems.push("post " + id + " from " + datetime + " comes after an older post on " + days[i]);
+      previous = t;
+    }
+  });
+  return problems;
+}
+
+// duplicateProblems: no post, comment, or element ID is on the page twice.
+export function duplicateProblems(document: Document): string[] {
+  const twice = (values: string[]) => [...new Set(values.filter((v, i) => values.indexOf(v) !== i))];
+  const all = (selector: string, value: (e: Element) => string) => Array.from(document.querySelectorAll(selector)).map(value);
+  return [
+    ...twice(all("[data-post]", (e) => e.getAttribute("data-post") ?? "")).map((id) => "post " + id + " is shown more than once"),
+    ...twice(all("[data-comment]", (e) => e.getAttribute("data-comment") ?? "")).map((id) => "comment " + id + " is shown more than once"),
+    ...twice(all("[id]", (e) => e.id)).map((id) => "the ID " + id + " is on more than one element"),
+  ];
+}
+
+// textProblems: what people wrote is shown as text, never as markup.
+export function textProblems(document: Document): string[] {
+  return Array.from(document.querySelectorAll("[data-body]"))
+    .filter((e) => e.childElementCount > 0)
+    .map((e) => "the text " + JSON.stringify(e.innerHTML.slice(0, 200)) + " has elements in it");
+}
+
+// otherHostProblems: the page asks no other host for anything, and names none to load anything from.
+export function otherHostProblems(window: Window, document: Document): string[] {
+  const origin = window.location.origin;
+  const problems: string[] = [];
+  const foreign = (url: string | null | undefined, base: string = window.location.href) => {
+    if (!url) return false;
+    try {
+      const u = new URL(url, base);
+      return (u.protocol === "http:" || u.protocol === "https:") && u.origin !== origin;
+    } catch {
+      return false;
+    }
+  };
+
+  for (const entry of window.performance.getEntriesByType("resource")) {
+    if (foreign(entry.name)) problems.push("it asked for " + entry.name);
+  }
+
+  const attributes: [string, string][] = [
+    ["script[src]", "src"], ["link[href]", "href"], ["img[src]", "src"], ["iframe[src]", "src"], ["source[src]", "src"],
+    ["video[src]", "src"], ["video[poster]", "poster"], ["audio[src]", "src"], ["embed[src]", "src"], ["object[data]", "data"],
+    ["form[action]", "action"], ["button[formaction]", "formaction"], ["input[formaction]", "formaction"],
+  ];
+  for (const [selector, attribute] of attributes) {
+    for (const element of Array.from(document.querySelectorAll(selector))) {
+      const value = element.getAttribute(attribute);
+      if (foreign(value)) problems.push("<" + element.tagName.toLowerCase() + " " + attribute + "=" + JSON.stringify(value) + ">");
+    }
+  }
+  for (const element of Array.from(document.querySelectorAll("img[srcset], source[srcset]"))) {
+    for (const candidate of (element.getAttribute("srcset") ?? "").split(",")) {
+      const url = candidate.trim().split(/\s+/)[0];
+      if (foreign(url)) problems.push("<" + element.tagName.toLowerCase() + " srcset> names " + url);
+    }
+  }
+
+  const urls = (css: string) => Array.from(css.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)|@import\s+["']([^"']+)["']/g)).map((m) => m[1] ?? m[2] ?? "");
+  for (const element of Array.from(document.querySelectorAll("[style]"))) {
+    for (const url of urls(element.getAttribute("style") ?? "")) if (foreign(url)) problems.push("a style attribute names " + url);
+  }
+  for (const sheet of Array.from(document.styleSheets)) {
+    if (sheet.href && foreign(sheet.href)) continue; // Reported as a link above.
+    let rules: CSSRuleList;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      problems.push("a stylesheet that cannot be read: " + sheet.href);
+      continue;
+    }
+    for (const rule of Array.from(rules)) {
+      for (const url of urls(rule.cssText)) {
+        if (foreign(url, sheet.href ?? window.location.href)) problems.push("the stylesheet " + (sheet.href ?? "in the page") + " names " + url);
+      }
+    }
+  }
+  return problems;
+}
+
+// failedResources: requests from this page that were answered with an HTTP error.
+export function failedResources(window: Window): string[] {
+  return (window.performance.getEntriesByType("resource") as PerformanceResourceTiming[])
+    .filter((entry) => (entry.responseStatus ?? 0) >= 400)
+    .map((entry) => entry.name + " answered " + entry.responseStatus);
+}

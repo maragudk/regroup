@@ -1,0 +1,145 @@
+name: Bombadil
+
+# Bombadil explores the group page of the preview build in a real browser and checks the product's
+# rules (bombadil/spec.ts): briefly on each pull request, and for longer on main every night or when
+# started by hand. It is not a merge gate yet. A broken rule fails this workflow's check on the pull
+# request and leaves the jobs of the CI workflow alone. On main, a failure opens an issue, or comments
+# on the one already open.
+
+on:
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 20 || 50 }}
+
+    permissions:
+      contents: read
+      issues: write
+
+    env:
+      # How long bombadil explores on a desktop screen and on a phone's. The phone runs only at night
+      # and when started by hand.
+      DESKTOP_TIME_LIMIT: ${{ github.event_name == 'pull_request' && '3m' || '20m' }}
+      PHONE_TIME_LIMIT: 10m
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Get Tailwind
+        # The same download as in the Dockerfile.
+        run: |
+          curl -sfL -o tailwindcss https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-x64
+          chmod a+x tailwindcss
+
+      - name: Get bombadil
+        # At the version and checksum pinned in the script.
+        run: ./bombadil/install.sh
+
+      - name: Show the browser
+        # Bombadil uses the Chrome that the runner comes with.
+        run: google-chrome --version
+
+      - name: Explore on a desktop screen
+        id: desktop
+        env:
+          BOMBADIL_TIME_LIMIT: ${{ env.DESKTOP_TIME_LIMIT }}
+          BOMBADIL_OUTPUT: ${{ runner.temp }}/bombadil/desktop
+          # Chrome's sandbox needs user namespaces, which GitHub's Ubuntu runners restrict.
+          BOMBADIL_ARGS: --no-sandbox --width 1280 --height 800
+        run: ./bombadil/run.sh
+
+      - name: Explore on a phone screen
+        id: phone
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        env:
+          BOMBADIL_TIME_LIMIT: ${{ env.PHONE_TIME_LIMIT }}
+          BOMBADIL_OUTPUT: ${{ runner.temp }}/bombadil/phone
+          BOMBADIL_ARGS: --no-sandbox --width 390 --height 844
+        run: ./bombadil/run.sh
+
+      - name: Keep the traces and logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: bombadil
+          path: ${{ runner.temp }}/bombadil/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Open an issue, or comment on the open one
+        if: ${{ failure() && github.event_name != 'pull_request' && github.ref_name == 'main' }}
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          LABEL: bombadil
+          OUTPUT: ${{ runner.temp }}/bombadil
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create "$LABEL" --color D93F0B --description "bombadil found a broken rule in a run on main" || true
+
+          body="$RUNNER_TEMP/bombadil-issue.md"
+          printf 'The `Bombadil` workflow failed on `main`: %s\n' "$RUN_URL" >"$body"
+
+          # What broke on each screen, from the end of bombadil's log, which names the rule and shows the
+          # values that broke it.
+          for screen in desktop phone; do
+            log="$(find "$OUTPUT/$screen" -name '*-bombadil.log' 2>/dev/null | head -n 1)"
+            [ -n "$log" ] || continue
+            echo >>"$body"
+            if [ -s "$OUTPUT/$screen/violated.txt" ]; then
+              echo "On the $screen screen, bombadil found a broken rule: $(paste -sd ' ' "$OUTPUT/$screen/violated.txt")" >>"$body"
+              echo >>"$body"
+              echo '```text' >>"$body"
+              sed -n '/ was violated:$/,/^Test finished/p' "$log" | head -n 80 >>"$body"
+              printf '\n```\n' >>"$body"
+            else
+              echo "On the $screen screen, the run failed without a broken rule. The end of its log:" >>"$body"
+              echo >>"$body"
+              echo '```text' >>"$body"
+              tail -n 30 "$log" >>"$body"
+              printf '\n```\n' >>"$body"
+            fi
+          done
+
+          # Unquoted, for $RUN_ID, so each backtick is escaped.
+          cat >>"$body" <<EOF
+
+          The trace, with a screenshot of every state, is in the run's \`bombadil\` artifact. To look at it from a checkout:
+
+          \`\`\`sh
+          gh run download $RUN_ID --name bombadil --dir bombadil-$RUN_ID
+          ./bombadil/install.sh
+          bin/bombadil browser inspect bombadil-$RUN_ID/desktop/*.trace
+          \`\`\`
+
+          If nothing above names a broken rule, the run failed before or around bombadil; its log on the run's page says why. \`docs/research/bombadil.md\` says how to read a failure.
+          EOF
+
+          existing="$(gh issue list --label "$LABEL" --state open --limit 1 --json number --jq '.[].number')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$body"
+          else
+            gh issue create --title "bombadil found a broken rule on main" --label "$LABEL" --body-file "$body"
+          fi
