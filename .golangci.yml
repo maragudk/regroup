@@ -1,5 +1,10 @@
 version: "2"
 
+run:
+  # The preview build's files are linted too. No file is left out by the tag, since none is behind !preview.
+  build-tags:
+    - preview
+
 linters:
   settings:
     staticcheck:

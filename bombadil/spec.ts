@@ -1,0 +1,281 @@
+// The product's rules for the group page, as bombadil checks, and the actions bombadil explores it with.
+// Run it with "make bombadil"; docs/research/bombadil.md says how, and how to read a failure.
+//
+// There are no roles yet. Every check holds for whoever is signed in, which "Switch person" in the
+// preview build changes, and for someone who is not signed in.
+
+import { always } from "@antithesishq/bombadil";
+import { actions, extract, getFingerprint, registerCustomAction, weighted } from "@antithesishq/bombadil/browser";
+import { clicks, inputs, navigation, scroll, waitOnce } from "@antithesishq/bombadil/browser/defaults/actions";
+import { clickablePoint, inViewport, isVisible } from "@antithesishq/bombadil/browser/dom";
+
+import * as page from "./page.ts";
+
+// Bombadil's own checks: no uncaught exception or unhandled rejection, nothing logged as an error, and
+// no page load answered with an HTTP error. Requests from a page are covered by noFailedRequests below.
+export {
+  noConsoleErrors,
+  noHttpErrorCodes,
+  noUncaughtExceptions,
+  noUnhandledPromiseRejections,
+} from "@antithesishq/bombadil/browser/defaults/properties";
+
+// ---- Checks ----
+
+const privacy = extract((state) => page.privacyProblems(state.window, state.document));
+
+// Someone who is not signed in sees "This group is private." at /, and that page never shows a post, a
+// comment, a member's name, or the group's name.
+export const privatePageShowsNothing = always(() => privacy.current.length === 0);
+
+const ownNew = extract((state) => page.ownNewProblems(state.document));
+
+// Nothing a person wrote carries a "new" mark for them, post or comment.
+export const ownWritingNeverNew = always(() => ownNew.current.length === 0);
+
+const recorded = extract((state) => {
+  const r = page.recorder(state.window);
+  return {
+    wrong: [...r.wrong, ...page.overdue(r, 10_000)],
+    twice: [...r.twice, ...page.buttonProblems(r, state.document)],
+    failed: [...r.failed, ...page.failedResources(state.window)],
+    failing: r.failing,
+    violations: r.violations,
+    failureBarShown: page.isShown(state.window, state.document.getElementById("request-failed")),
+  };
+});
+
+// What the page shows once an answer has come:
+//   - After a post: one new post with the text as the server keeps it, by the person signed in, at the
+//     top, shown as text, and an empty field.
+//   - After a comment: one new comment with that text, by the person, shown as text, last in its post's
+//     list, a count one higher, as many comments shown as the count says, and an empty field.
+//   - After opening a post's comments: no new-comment mark on the post, no word that they are loading,
+//     as many comments shown as the count says, and as many of them marked new as the count said were.
+//   - After text that is refused: the message that says why, no new post at the top or a comment count
+//     that has not changed, and the text still in its field.
+//   - After "Earlier posts": more posts, or no button for more and a line that says nothing was posted
+//     before.
+// Comparisons with what the page showed before are left out when another request from the same form
+// or post was on its way, and on a page the browser restored from its back/forward cache. Every request
+// is answered within ten seconds.
+export const answersShowWhatWasDone = always(() => recorded.current.wrong.length === 0);
+
+// A form, or a post's comments, sends one request at a time: its button stays off, and opening the
+// comments again sends nothing, until its own request has been answered.
+export const oneRequestAtATime = always(() => recorded.current.twice.length === 0);
+
+// No request from the page fails: Datastar reports no error, and nothing is answered with an HTTP error.
+export const noFailedRequests = always(() => recorded.current.failed.length === 0);
+
+// The failure bar shows exactly while a request has failed and no other has started since.
+export const failureBarOnlyOnFailure = always(() => recorded.current.failureBarShown === recorded.current.failing);
+
+// The page breaks no rule of its content security policy.
+export const noContentSecurityPolicyViolations = always(() => recorded.current.violations.length === 0);
+
+const otherHosts = extract((state) => page.otherHostProblems(state.window, state.document));
+
+// The page never asks any other host for anything.
+export const noOtherHosts = always(() => otherHosts.current.length === 0);
+
+const order = extract((state) => page.orderProblems(state.document));
+
+// No day heading appears twice, days are in order, newest first, and posts within a day are newest
+// first and from that day, also after "Earlier posts". At most one day is "Today" and one "Yesterday".
+export const timelineInOrder = always(() => order.current.length === 0);
+
+const duplicates = extract((state) => page.duplicateProblems(state.document));
+
+// No post or comment appears twice on a page, and no element ID does.
+export const nothingTwice = always(() => duplicates.current.length === 0);
+
+const markup = extract((state) => page.textProblems(state.document));
+
+// What people wrote is shown as text, never as markup.
+export const writingShownAsText = always(() => markup.current.length === 0);
+
+// ---- Actions ----
+
+// What to write, in shapes that the rules for a body treat differently: text with markup, line breaks,
+// whitespace around it, letters from beyond ASCII, invisible formatting, a lone surrogate, nothing
+// but whitespace, control characters, and exactly as long as allowed and one longer. Each is made
+// different with the given tag, so that the same text is not on a page twice. The second of each pair
+// is how long to make the text with x's, so that the long ones are not spelled out in the log. A lone
+// surrogate cannot pass through an action's arguments, which are JSON, so "{surrogate}" stands for one.
+function texts(tag: string, maxLength: number): [string, number][] {
+  const shapes: [string, number][] = [
+    "Lunch at noon? " + tag,
+    "<b>Not bold</b> & <script>alert('" + tag + "')</script> <img src=x onerror=alert(1)>",
+    "First line " + tag + "\nSecond line\n\nAfter a blank line",
+    "   \n\t  Space around " + tag + "  \n ",
+    "Smørrebrød på taget " + tag + " 🥪 — naïve café, ﬁne, שלום, 日本語",
+    "Zero\u{200b}width " + tag + "\u{2060}",
+    "\u{feff}Byte order mark " + tag,
+    "Lone surrogate {surrogate} " + tag,
+    "**Not bold** _nor italic_ [a link](https://example.com/" + tag + ")",
+    "",
+    " \n\t \u{a0}\u{2003}",
+    "\u{200b}\u{2060}",
+    "Bell \u{7} " + tag,
+    "Escape \u{1b}[31m red " + tag,
+    "Nul \u{0} " + tag,
+  ].map((text) => [text, 0]);
+  return [...shapes, [tag, maxLength], [tag, maxLength + 1]];
+}
+
+// tag that makes a text different from those before it in the run.
+const tag = (() => {
+  let made = 0;
+  return () => "#" + ++made;
+})();
+
+// write the given text into the form with the given ID, made as long as the given length with x's,
+// and send it.
+async function write(document: Document, formID: string, text: string, length: number) {
+  const form = document.getElementById(formID);
+  const field = form?.querySelector("textarea");
+  const button = form?.querySelector<HTMLButtonElement>("button[type=submit]");
+  if (!field || !button || button.disabled) return;
+  text = text.replaceAll("{surrogate}", String.fromCharCode(0xd800));
+  field.focus();
+  field.value = text + "x".repeat(Math.max(0, length - text.length));
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+  button.click();
+}
+
+const composerReady = extract((state) => {
+  const button = state.document.querySelector<HTMLButtonElement>("#composer button[type=submit]");
+  return button !== null && !button.disabled;
+});
+
+const writePost = registerCustomAction("writePost", async (document, _window, text: string, length: number) =>
+  write(document, "composer", text, length),
+);
+
+const openThreads = extract((state) =>
+  Array.from(state.document.querySelectorAll<HTMLDetailsElement>("details[open][id$='-thread']")).flatMap((details) => {
+    const button = details.querySelector<HTMLButtonElement>("form[id$='-comment-form'] button[type=submit]");
+    return button && !button.disabled ? [details.id.replace(/^post-/, "").replace(/-thread$/, "")] : [];
+  }),
+);
+
+const writeComment = registerCustomAction("writeComment", async (document, _window, postID: string, text: string, length: number) =>
+  write(document, "post-" + postID + "-comment-form", text, length),
+);
+
+const summaries = extract((state) =>
+  Array.from(state.document.querySelectorAll("details[id$='-thread'] > summary")).flatMap((summary) => {
+    if (!isVisible(state.window, summary)) return [];
+    const point = clickablePoint(summary);
+    if (!point || !inViewport(state.window, point)) return [];
+    return [{ fingerprint: getFingerprint(summary), point }];
+  }),
+);
+
+const closedThreads = extract((state) =>
+  Array.from(state.document.querySelectorAll<HTMLDetailsElement>("details[id$='-thread']:not([open])")).flatMap((details) =>
+    isVisible(state.window, details) ? [details.id.replace(/^post-/, "").replace(/-thread$/, "")] : [],
+  ),
+);
+
+// fetched resolves when Datastar reports the given type of event for a request from the given element,
+// or after a second.
+function fetched(document: Document, window: Window, element: Element, type: string): Promise<void> {
+  return new Promise((resolve) => {
+    const listener = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { type: string; el: Element | null };
+      if (detail.el !== element || detail.type !== type) return;
+      document.removeEventListener("datastar-fetch", listener);
+      resolve();
+    };
+    document.addEventListener("datastar-fetch", listener);
+    window.setTimeout(() => {
+      document.removeEventListener("datastar-fetch", listener);
+      resolve();
+    }, 1000);
+  });
+}
+
+// Opens a post's comments, and closes and opens them again while the first opening is on its way, as
+// someone who clicks again and again does. Opening them again sends nothing until the first answer has
+// come.
+const reopenComments = registerCustomAction("reopenComments", async (document, window, postID: string) => {
+  const details = document.getElementById("post-" + postID + "-thread");
+  if (!(details instanceof HTMLDetailsElement) || details.open) return;
+  const started = fetched(document, window, details, "started");
+  details.open = true;
+  await started;
+  details.open = false;
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  details.open = true;
+});
+
+// Comments with the given text on a post whose comments are open, and while the comment is on its way,
+// closes and opens the comments again, and presses Comment again once opening them is done, if the
+// comment is still on its way. Its button stays off until the comment's own answer has come, so the
+// second press sends nothing.
+const commentWhileReopening = registerCustomAction("commentWhileReopening", async (document, window, postID: string, text: string) => {
+  const details = document.getElementById("post-" + postID + "-thread");
+  const form = document.getElementById("post-" + postID + "-comment-form");
+  const field = form?.querySelector("textarea");
+  const button = form?.querySelector<HTMLButtonElement>("button[type=submit]");
+  if (!(details instanceof HTMLDetailsElement) || !details.open || !form || !field || !button || button.disabled) return;
+  field.value = text;
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+  let commented = false;
+  void fetched(document, window, form, "finished").then(() => (commented = true));
+  button.click();
+  details.open = false;
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  const opened = fetched(document, window, details, "finished");
+  details.open = true;
+  await opened;
+  if (!commented && !button.disabled) button.click();
+});
+
+const earlierOffered = extract((state) => {
+  const button = state.document.querySelector<HTMLButtonElement>("#earlier button[type=submit]");
+  return button !== null && !button.disabled;
+});
+
+const loadEarlier = registerCustomAction("loadEarlier", async (document) => {
+  const button = document.querySelector<HTMLButtonElement>("#earlier button[type=submit]");
+  if (!button || button.disabled) return;
+  button.scrollIntoView({ block: "center" });
+  button.click();
+});
+
+const onGroupPage = extract((state) => page.isGroupPage(state.document));
+
+const signOut = registerCustomAction("signOut", async (document, window) => {
+  page.forgetSignIn(window);
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = "/logout";
+  document.body.append(form);
+  form.submit();
+});
+
+// Bombadil picks evenly between the action generators a specification exports, so this is the only one.
+export const exploring = weighted([
+  [100, clicks],
+  [100, inputs],
+  [50, scroll],
+  [10, navigation],
+  [1, waitOnce],
+  // Opens or closes a post's comments. Bombadil's own clicks are on links, buttons, fields, and labels.
+  [40, actions(() => summaries.current.map((target) => ({ Click: target })))],
+  // Posts one of the shapes of text.
+  [30, actions(() => (composerReady.current ? texts(tag(), page.postMaxLength).map(([text, length]) => writePost(text, length)) : []))],
+  // Comments on a post whose comments are open, with one of the shapes of text.
+  [30, actions(() => openThreads.current.flatMap((postID) => texts(tag(), page.commentMaxLength).map(([text, length]) => writeComment(postID, text, length))))],
+  // Opens a post's comments twice in quick succession.
+  [10, actions(() => closedThreads.current.map((postID) => reopenComments(postID)))],
+  // Comments while the post's comments are opened again.
+  [10, actions(() => openThreads.current.map((postID) => commentWhileReopening(postID, "While reopening " + tag())))],
+  // Loads earlier posts. The button is at the end of the timeline, further down than scrolling often gets.
+  [10, actions(() => (earlierOffered.current ? [loadEarlier()] : []))],
+  // Signs out, by the route the app has for it, which no page links to yet.
+  [2, actions(() => (onGroupPage.current ? [signOut()] : []))],
+]);

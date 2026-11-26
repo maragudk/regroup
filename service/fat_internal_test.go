@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"maragu.dev/is"
+
+	"app/model"
 )
 
 func TestNewFat(t *testing.T) {
@@ -29,7 +31,7 @@ func TestSetup(t *testing.T) {
 		// one that gets a wiring function but never a line in Setup would go missing in production and
 		// nowhere else. The capabilities can be nil, since nothing calls them.
 		f := NewFat(NewFatOptions{})
-		Setup(f, nil, nil, nil)
+		Setup(f, nil, nil, nil, nil, model.Group{})
 
 		fields := reflect.ValueOf(f).Elem()
 		var operations int

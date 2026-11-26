@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -18,7 +19,7 @@ import (
 // Fat holds the business logic, one exported method per operation.
 //
 // It carries only what every operation needs: the logger and the tracer. Capabilities belong to each
-// operation's wiring function ([GetUser]), which sets that operation's func field from what it is
+// operation's wiring function (such as [GetUser]), which sets that operation's func field from what it is
 // given — so an operation cannot reach a capability it did not declare, since Fat holds none itself,
 // and a method panics if never wired.
 //
@@ -28,7 +29,12 @@ type Fat struct {
 	log    *slog.Logger
 	tracer trace.Tracer
 
-	getUser func(ctx context.Context, id model.UserID) (model.User, error)
+	createComment func(ctx context.Context, actor model.UserID, postID model.PostID, token, body string) (model.Comment, error)
+	createPost    func(ctx context.Context, actor model.UserID, token, body string) (model.Post, error)
+	getComments   func(ctx context.Context, actor model.UserID, postID model.PostID) ([]model.TimelineComment, error)
+	getMembers    func(ctx context.Context, actor model.UserID) (int, error)
+	getTimeline   func(ctx context.Context, actor model.UserID, cursor string, limit int) (model.Timeline, error)
+	getUser       func(ctx context.Context, id model.UserID) (model.User, error)
 }
 
 // NewFatOptions is the configuration a [Fat] carries whatever it ends up wired to. The capabilities
@@ -56,7 +62,14 @@ func NewFat(opts NewFatOptions) *Fat {
 // The wiring functions it calls are the list of what each operation actually depends on. A capability
 // that no operation wires yet is a parameter all the same, so the first operation to need one finds it
 // already plumbed: bucket and sender are waiting like that.
-func Setup(f *Fat, bucket *s3.Bucket, db *sqlite.Database, sender *postmark.Sender) {
+//
+// The clock is passed in, so that no operation reads the time directly.
+func Setup(f *Fat, bucket *s3.Bucket, db *sqlite.Database, sender *postmark.Sender, now func() time.Time, group model.Group) {
+	CreateComment(f, db, now)
+	CreatePost(f, db, now)
+	GetComments(f, db)
+	GetMembers(f, db)
+	GetTimeline(f, db, now, group)
 	GetUser(f, db)
 }
 

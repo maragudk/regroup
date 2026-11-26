@@ -9,3 +9,14 @@ const (
 	ErrorUserInactive  = model.ErrorUserInactive
 	ErrorUserNotFound  = model.ErrorUserNotFound
 )
+
+const (
+	ErrorBodyEmpty         = Error("body empty")
+	ErrorBodyInvalid       = Error("body invalid")
+	ErrorBodyTooLong       = Error("body too long")
+	ErrorCommentNotFound   = Error("comment not found")
+	ErrorCursorInvalid     = Error("cursor invalid")
+	ErrorFormResentChanged = Error("form sent again with other text")
+	ErrorFormTokenInvalid  = Error("form token invalid")
+	ErrorPostNotFound      = Error("post not found")
+)

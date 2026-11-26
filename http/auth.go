@@ -40,3 +40,9 @@ func AddUserToContext(log *slog.Logger, ug userGetter) gluehttp.Middleware {
 		})
 	}
 }
+
+// getUserFromContext, which is nil if nobody is signed in.
+func getUserFromContext(ctx context.Context) *model.User {
+	user, _ := ctx.Value(contextUserKey).(*model.User)
+	return user
+}

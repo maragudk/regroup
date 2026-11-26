@@ -23,6 +23,21 @@ Open the app in a browser with your `playwright-cli` skill. Each checkout gets i
 
 Query the SQLite database directly with `sqlite3 app.db`. Always run `pragma foreign_keys = 1;` as the first statement after connecting.
 
+## Testing
+
+Markus does not read the code, so the tests carry the trust. He agreed these rules on 2026-11-26. The reasoning, and what is still open, is in `docs/todo/verification.md`.
+
+- **Unit and integration tests** cover every behaviour, against real SQLite and the real router. A behaviour Markus has approved gets a test, so that a later change cannot quietly undo it.
+- **Property-based tests with hegel** (`hegel.dev/go/hegel`; use the `hegel` skill, and see `docs/research/hegel.md`) go wherever a rule must hold for many inputs or for any sequence of actions. Simple properties suit things like grouping by day across time zones, escaping, paging, and tokens. Stateful ones (`hegel.RunStateful`) suit people and roles, sign-in links, and the timeline with its "new" marks. Keep every failure hegel finds as a fixed test, because CI does not save them.
+- **Go fuzzing** covers anything that parses what a person sends.
+- **Bombadil** (see `docs/research/bombadil.md`; pin its version) explores the app in a real browser, with the product's rules written as checks for each role. Do a short run for each piece of work and a longer one nightly on `main`. It is not a merge gate yet.
+- **A small table test, not generated cases,** covers who may do what across the three roles.
+- **The clock and randomness are passed in,** never read directly, so that expiry and generated histories can be replayed.
+- **There is one test-only way to sign in,** behind a build tag. A test proves the production build does not contain it.
+- **Every fix proves itself:** plant the fault, show that the new test fails, then take the fault out.
+- **Each piece of work ends with** a private page of screenshots and a short list of things for Markus to try on the preview.
+- **Mutation testing, reviews by other models, and a security review** belong to the gate before production. They are not routine.
+
 ## Memory
 
 Agent memory for this project. Use the `memory` skill before adding, changing, or removing entries.
@@ -52,3 +67,11 @@ Markus on 2026-11-26: "I intend to make one for my shared office space, that's i
 ### Conversation exports go straight to `main`
 
 Commit an export to `docs/conversations/` on `main` and push it, with no branch and no pull request. Markus on 2026-11-26: "Why does it go into a branch? Just push it to main".
+
+### Markus is the oracle for product behaviour; build first, then adjust
+
+On 2026-11-26, asked what regroup's test oracle is, Markus said: "I don't think we can have a test oracle. For product behavior, I guess I'm the oracle? But lean towards building something and then we can adjust. Nothing is in production until I say so, so we can break stuff and iterate." So build a piece, show it to him, and adjust, instead of settling every rule or building heavy test machinery first. He chose the same day to judge each piece of work in two ways: a preview instance he uses himself, and a page of screenshots. What is agreed and what is open about verification is in `docs/todo/verification.md`.
+
+### The tailnet name may appear in public files
+
+Markus on 2026-11-26, about a conversation export that mentioned `mini3.king-dojo.ts.net`: "The tailnet name is fine". So don't hold back or flag an export or document for the tailnet name alone. IP addresses, keys, and tokens are a different matter and still get flagged.
