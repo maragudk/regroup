@@ -31,6 +31,17 @@ func TestCleanPostBody(t *testing.T) {
 		{name: "refuses a body of only whitespace", input: " \r\n\t\u00a0 ", err: model.ErrorBodyEmpty},
 		{name: "refuses a body of only invisible formatting characters", input: "\u200b\ufeff\u2060\u00ad", err: model.ErrorBodyEmpty},
 		{name: "keeps invisible formatting characters next to visible ones", input: "👩\u200d💻 shipped", expected: "👩\u200d💻 shipped"},
+		{name: "refuses a body of only Hangul fillers", input: "\u3164\uffa0\u115f\u1160", err: model.ErrorBodyEmpty},
+		{name: "refuses a body of only the Braille blank", input: "\u2800 \u2800", err: model.ErrorBodyEmpty},
+		{name: "refuses a body of only variation selectors and the combining grapheme joiner", input: "\ufe0f\U000e0100\u034f\u180b", err: model.ErrorBodyEmpty},
+		{name: "refuses a body of only tag characters and the Mongolian vowel separator", input: "\U000e0001\U000e0067\U000e007f\u180e", err: model.ErrorBodyEmpty},
+		{name: "refuses a body of only default-ignorable code points that are not assigned yet", input: "\u2065\ufff0\U000e0fff", err: model.ErrorBodyEmpty},
+		{name: "refuses a body of only Khmer inherent vowels", input: "\u17b4\u17b5", err: model.ErrorBodyEmpty},
+		{name: "keeps a Hangul syllable next to a filler", input: "한\u3164", expected: "한\u3164"},
+		{name: "keeps a Braille pattern with a dot in it", input: "\u2801", expected: "\u2801"},
+		{name: "keeps a combining accent on its own, which is drawn", input: "\u0301", expected: "\u0301"},
+		{name: "keeps an Arabic number sign, which is a format character that is drawn", input: "\u0600", expected: "\u0600"},
+		{name: "keeps a character for private use, which is drawn", input: "\ue000", expected: "\ue000"},
 		{name: "refuses a body one character too long", input: strings.Repeat("æ", model.PostBodyMaxLength+1), err: model.ErrorBodyTooLong},
 		{name: "counts the length after trimming", input: " " + strings.Repeat("a", model.PostBodyMaxLength) + " ", expected: strings.Repeat("a", model.PostBodyMaxLength)},
 		{name: "refuses invalid UTF-8", input: "Cake \xff", err: model.ErrorBodyInvalid},
@@ -56,6 +67,33 @@ func TestCleanPostBody(t *testing.T) {
 
 			body, err := model.CleanPostBody(input)
 			checkCleanedBody(ht, input, body, err, model.PostBodyMaxLength)
+		})
+	})
+
+	t.Run("refuses as empty any text of only white space, default-ignorable code points, and the Braille blank", func(t *testing.T) {
+		hegel.Test(t, func(ht *hegel.T) {
+			input := string(hegel.Draw(ht, hegel.Lists(blankRune()).MaxSize(30)))
+
+			if _, err := model.CleanPostBody(input); err != model.ErrorBodyEmpty {
+				ht.Fatalf("cleaning %+q gave %v, not that it is empty", input, err)
+			}
+		})
+	})
+
+	t.Run("accepts such text with one visible character anywhere in it, and keeps that character", func(t *testing.T) {
+		hegel.Test(t, func(ht *hegel.T) {
+			blanks := hegel.Draw(ht, hegel.Lists(blankRune()).MaxSize(30))
+			visible := hegel.Draw(ht, visibleRune())
+			at := hegel.Draw(ht, hegel.Integers(0, len(blanks)))
+			input := string(blanks[:at]) + string(visible) + string(blanks[at:])
+
+			body, err := model.CleanPostBody(input)
+			if err != nil {
+				ht.Fatalf("cleaning %+q gave %v", input, err)
+			}
+			if !strings.ContainsRune(body, visible) {
+				ht.Fatalf("cleaning %+q gave %+q, without %+q", input, body, visible)
+			}
 		})
 	})
 
@@ -110,7 +148,7 @@ func TestCleanCommentBody(t *testing.T) {
 // holds control characters, carriage returns, or invalid UTF-8.
 func bodyText(maxLength int) hegel.Generator[string] {
 	return hegel.Composite(func(tc hegel.TestCase) string {
-		space := hegel.SampledFrom([]string{"", " ", "\n", "\r\n", "\r", "\t", "\u00a0", " \n \t", "\u200b", "\ufeff\u2060", "\u00ad"})
+		space := hegel.SampledFrom([]string{"", " ", "\n", "\r\n", "\r", "\t", "\u00a0", " \n \t", "\u200b", "\ufeff\u2060", "\u00ad", "\u3164", "\u2800", "\ufe0f"})
 		before := hegel.Draw(tc, space)
 		after := hegel.Draw(tc, space)
 
@@ -125,7 +163,7 @@ func bodyText(maxLength int) hegel.Generator[string] {
 		case 2:
 			middle = string(hegel.Draw(tc, hegel.Binary(0, 20)))
 		case 3:
-			middle = hegel.Draw(tc, hegel.Text().Alphabet("ab \n\r\t\x00\x7f\u200b\u200d\ufeff\u2028").MaxSize(20))
+			middle = hegel.Draw(tc, hegel.Text().Alphabet("ab \n\r\t\x00\x7f\u200b\u200d\ufeff\u2028\u3164\u2800\u0600").MaxSize(20))
 		}
 
 		return before + middle + after
@@ -151,7 +189,7 @@ func checkCleanedBody(ht *hegel.T, input, body string, err error, maxLength int)
 				ht.Fatalf("refused %q as invalid, but it is valid UTF-8 with no control characters", input)
 			}
 		case model.ErrorBodyEmpty:
-			if strings.ContainsFunc(normalised, func(r rune) bool { return !unicode.In(r, unicode.White_Space, unicode.Cf) }) {
+			if strings.ContainsFunc(normalised, func(r rune) bool { return !blank(r) }) {
 				ht.Fatalf("refused %q as empty, but it has something visible", input)
 			}
 		case model.ErrorBodyTooLong:
@@ -170,7 +208,7 @@ func checkCleanedBody(ht *hegel.T, input, body string, err error, maxLength int)
 	if body != normalised {
 		ht.Fatalf("body %q is not the input %q with its line breaks normalised and its ends trimmed", body, input)
 	}
-	if !strings.ContainsFunc(body, func(r rune) bool { return !unicode.In(r, unicode.White_Space, unicode.Cf) }) {
+	if !strings.ContainsFunc(body, func(r rune) bool { return !blank(r) }) {
 		ht.Fatalf("accepted %q, which has nothing visible", input)
 	}
 	if strings.Contains(body, "\r") {
@@ -179,4 +217,70 @@ func checkCleanedBody(ht *hegel.T, input, body string, err error, maxLength int)
 	if utf8.RuneCountInString(body) > maxLength {
 		ht.Fatalf("body is %v characters, more than %v", utf8.RuneCountInString(body), maxLength)
 	}
+}
+
+// defaultIgnorable code points, as Unicode's DerivedCoreProperties.txt lists them, written out here so that
+// the tests do not take the rule from the code they test. Fonts draw none of them.
+var defaultIgnorable = []struct{ lo, hi rune }{
+	{0x00AD, 0x00AD}, {0x034F, 0x034F}, {0x061C, 0x061C}, {0x115F, 0x1160}, {0x17B4, 0x17B5},
+	{0x180B, 0x180F}, {0x200B, 0x200F}, {0x202A, 0x202E}, {0x2060, 0x206F}, {0x3164, 0x3164},
+	{0xFE00, 0xFE0F}, {0xFEFF, 0xFEFF}, {0xFFA0, 0xFFA0}, {0xFFF0, 0xFFF8}, {0x1BCA0, 0x1BCA3},
+	{0x1D173, 0x1D17A}, {0xE0000, 0xE0FFF},
+}
+
+// whiteSpace characters, as Unicode's PropList.txt lists them, without the controls among them, which a
+// body may not hold other than line feeds and tabs.
+var whiteSpace = []rune{
+	'\t', '\n', ' ', 0x00A0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008,
+	0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
+}
+
+// brailleBlank is drawn as nothing, though Unicode does not class it as ignorable.
+const brailleBlank = 0x2800
+
+// blank reports whether a body made only of the given character would show nothing: it is white space,
+// default-ignorable, the Braille blank, or another format character that is not drawn. Format characters
+// that are drawn, such as the Arabic number sign, are the prepended concatenation marks.
+func blank(r rune) bool {
+	for _, d := range defaultIgnorable {
+		if d.lo <= r && r <= d.hi {
+			return true
+		}
+	}
+	return unicode.Is(unicode.White_Space, r) || r == brailleBlank ||
+		(unicode.Is(unicode.Cf, r) && !unicode.Is(unicode.Prepended_Concatenation_Mark, r))
+}
+
+// blankRune that a body may hold, but that shows nothing: white space other than carriage returns, a
+// default-ignorable code point, or the Braille blank.
+func blankRune() hegel.Generator[rune] {
+	return hegel.Composite(func(tc hegel.TestCase) rune {
+		switch hegel.Draw(tc, hegel.Integers(0, 2)) {
+		case 0:
+			return hegel.Draw(tc, hegel.SampledFrom(whiteSpace))
+		case 1:
+			d := hegel.Draw(tc, hegel.SampledFrom(defaultIgnorable))
+			return rune(hegel.Draw(tc, hegel.Integers(int(d.lo), int(d.hi))))
+		default:
+			return brailleBlank
+		}
+	})
+}
+
+// visibleRune is a letter, a mark, a number, a punctuation mark, or a symbol that is not blank.
+func visibleRune() hegel.Generator[rune] {
+	return hegel.Composite(func(tc hegel.TestCase) rune {
+		table := hegel.Draw(tc, hegel.SampledFrom([]*unicode.RangeTable{unicode.L, unicode.M, unicode.N, unicode.P, unicode.S}))
+
+		var ranges []unicode.Range32
+		for _, r := range table.R16 {
+			ranges = append(ranges, unicode.Range32{Lo: uint32(r.Lo), Hi: uint32(r.Hi), Stride: uint32(r.Stride)})
+		}
+		ranges = append(ranges, table.R32...)
+		r := hegel.Draw(tc, hegel.SampledFrom(ranges))
+		v := rune(r.Lo + r.Stride*uint32(hegel.Draw(tc, hegel.Integers(0, int((r.Hi-r.Lo)/r.Stride)))))
+
+		tc.Assume(!blank(v))
+		return v
+	})
 }

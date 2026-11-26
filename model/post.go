@@ -51,8 +51,7 @@ const (
 //   - It must be valid UTF-8, or [ErrorBodyInvalid].
 //   - Line breaks are kept, and "\r\n" and a lone "\r" become "\n".
 //   - Whitespace at the start and the end is trimmed.
-//   - What is left must hold something other than whitespace and invisible formatting characters
-//     (Unicode category Cf, such as a zero-width space), or [ErrorBodyEmpty].
+//   - What is left must hold at least one visible character, or [ErrorBodyEmpty]. See [visible].
 //   - It must contain no control characters other than line breaks and tabs, or [ErrorBodyInvalid].
 //   - It must be at most [PostBodyMaxLength] characters (runes), or [ErrorBodyTooLong].
 func CleanPostBody(body string) (string, error) {
@@ -75,7 +74,7 @@ func cleanBody(body string, maxLength int) (string, error) {
 	body = strings.ReplaceAll(body, "\r", "\n")
 	body = strings.TrimSpace(body)
 
-	if !strings.ContainsFunc(body, func(r rune) bool { return !unicode.IsSpace(r) && !unicode.Is(unicode.Cf, r) }) {
+	if !strings.ContainsFunc(body, visible) {
 		return "", ErrorBodyEmpty
 	}
 
@@ -90,4 +89,26 @@ func cleanBody(body string, maxLength int) (string, error) {
 	}
 
 	return body, nil
+}
+
+// visible reports whether a character is drawn as something a reader can see. These are not:
+//   - White space.
+//   - Default-ignorable code points, which fonts draw as nothing: format characters such as a zero-width
+//     space or a tag character, variation selectors, the Hangul fillers, the combining grapheme joiner,
+//     and the code points Unicode keeps for more of these.
+//   - Other format characters (Unicode category Cf), except the prepended concatenation marks, such as the
+//     Arabic number sign, which are drawn.
+//   - The Braille pattern blank, which is drawn as nothing though Unicode does not class it as ignorable.
+//
+// Everything else is visible, including a combining mark on its own, a character for private use, and a
+// control character, which [cleanBody] refuses for another reason.
+func visible(r rune) bool {
+	switch {
+	case unicode.In(r, unicode.White_Space, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point):
+		return false
+	case unicode.Is(unicode.Cf, r):
+		return unicode.Is(unicode.Prepended_Concatenation_Mark, r)
+	default:
+		return r != 0x2800 // BRAILLE PATTERN BLANK
+	}
 }
