@@ -180,7 +180,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		// its day if that is one of them.
 		if slices.Contains(days, day.Date) {
 			return nil, writePatches(props.W,
-				patch{elements: html.Composer(html.ComposerProps{Days: days, Fresh: post.ID.String(), Token: token()})},
+				patch{elements: Group{html.Composer(html.ComposerProps{Days: days, Fresh: post.ID.String(), Token: token()}), posted(post)}},
 				patch{selector: "#" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts, posts)},
 			)
 		}
@@ -188,7 +188,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		// Otherwise it brings its day's heading along, to the top of the timeline. If the timeline was
 		// empty, and said so, the day takes the place of that.
 		patches := []patch{
-			{elements: html.Composer(html.ComposerProps{Days: firstDays(append([]model.Date{day.Date}, days...)), Fresh: post.ID.String(), Token: token()})},
+			{elements: Group{html.Composer(html.ComposerProps{Days: firstDays(append([]model.Date{day.Date}, days...)), Fresh: post.ID.String(), Token: token()}), posted(post)}},
 			{selector: "#" + html.TimelineID, mode: "prepend", elements: html.TimelineDay(day, now, posts)},
 		}
 		if len(days) == 0 {
@@ -239,12 +239,17 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			known = append(known, last)
 		}
 
+		// The first post loaded takes the keyboard focus, which would otherwise fall back to the page when
+		// the button that asked for it goes away.
 		now := now()
 		var patches []patch
 		var days []model.TimelineDay
+		focus := posts
+		focus.Focus = true
 		for _, day := range timeline.Days {
 			if slices.Contains(known, day.Date) {
-				patches = append(patches, patch{selector: "#" + html.DayPostsID(day.Date), mode: "append", elements: html.TimelinePosts(day.Posts, posts)})
+				patches = append(patches, patch{selector: "#" + html.DayPostsID(day.Date), mode: "append", elements: html.TimelinePosts(day.Posts, focus)})
+				focus = posts
 				continue
 			}
 			days = append(days, day)
@@ -252,10 +257,15 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		}
 		if len(days) > 0 {
 			patches = append(patches, patch{selector: "#" + html.TimelineID, mode: "append", elements: Map(days, func(day model.TimelineDay) Node {
-				return html.TimelineDay(day, now, posts)
+				n := html.TimelineDay(day, now, focus)
+				focus = posts
+				return n
 			})})
 		}
-		patches = append(patches, patch{elements: html.EarlierPosts(html.EarlierPostsProps{Next: timeline.Next, Days: lastDays(known)})})
+		patches = append(patches, patch{elements: Group{
+			html.EarlierPosts(html.EarlierPostsProps{Next: timeline.Next, Days: lastDays(known)}),
+			loaded(timeline),
+		}})
 
 		return nil, writePatches(props.W, patches...)
 	})
@@ -332,8 +342,43 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		}
 
 		// A comment sent again gets what it got the first time, which is on the post it was made on.
-		return comments(props, user, comment.PostID, html.CommentForm(html.CommentFormProps{PostID: comment.PostID, Fresh: comment.ID.String(), Token: token()}))
+		return comments(props, user, comment.PostID,
+			html.CommentForm(html.CommentFormProps{PostID: comment.PostID, Fresh: comment.ID.String(), Token: token()}),
+			html.Announcement(comment.ID.String(), "Your comment was added."),
+		)
 	})
+}
+
+// posted says to screen readers that the given post is on the timeline.
+func posted(p model.Post) Node {
+	return html.Announcement(p.ID.String(), "Your post is on the timeline.")
+}
+
+// loaded says to screen readers how many earlier posts the given page loaded, and if they are the last.
+func loaded(page model.Timeline) Node {
+	var first model.PostID
+	var count int
+	for _, day := range page.Days {
+		for _, p := range day.Posts {
+			if first == "" {
+				first = p.ID
+			}
+			count++
+		}
+	}
+
+	switch {
+	case count == 0:
+		return html.Announcement("none", "There are no earlier posts.")
+	case count == 1 && page.Next == "":
+		return html.Announcement(first.String(), "Loaded 1 earlier post. There are no posts before it.")
+	case count == 1:
+		return html.Announcement(first.String(), "Loaded 1 earlier post.")
+	case page.Next == "":
+		return html.Announcement(first.String(), fmt.Sprint("Loaded ", count, " earlier posts. There are no posts before these."))
+	default:
+		return html.Announcement(first.String(), fmt.Sprint("Loaded ", count, " earlier posts."))
+	}
 }
 
 // parseForm of the request, which may be no larger than a megabyte. That is many times the longest

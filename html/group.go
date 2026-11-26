@@ -89,6 +89,8 @@ func GroupPage(props GroupPageProps) Node {
 			NoScript(P(Class(postColumn+" mt-10 text-stone-600"), Text("Opening comments and loading earlier posts need JavaScript."))),
 		),
 
+		Announcement("", ""),
+
 		// While a request from the page is on its way, the buttons of what sent it are off, so that the
 		// same thing cannot be sent twice. If it fails, this says so, until the next request starts.
 		P(ID("request-failed"), Role("alert"),
@@ -118,6 +120,23 @@ const postColumn = "max-w-[608px] lg:ml-[232px]"
 // request is how every form on the page is sent: as a form, once, and without ending another request
 // of the same kind that is still on its way.
 const request = "{contentType: 'form', retryMaxCount: 0, requestCancellation: 'disabled'}"
+
+// sent is what comes after a request in an expression. A request that cannot be sent at all ends in an
+// error, which would go unhandled. It is caught, and the bar that says a request failed shows it, as it
+// shows every other failure.
+const sent = ".catch(() => $_failed = true)"
+
+// AnnouncementID of the live region that says things to screen readers.
+const AnnouncementID = "announcement"
+
+// Announcement says the given text to screen readers, politely, in the live region every group page has.
+// The text is in an element named after the given key, which says what it is about, so that the same
+// words about something else are said again. With no text, it is the empty live region.
+func Announcement(key, text string) Node {
+	return P(ID(AnnouncementID), Role("status"), Aria("live", "polite"), Class("sr-only"),
+		If(text != "", Span(ID(AnnouncementID+"-"+key), Text(text))),
+	)
+}
 
 // PrivatePageProps is what the private page shows.
 type PrivatePageProps struct {
@@ -174,7 +193,7 @@ func Composer(props ComposerProps) Node {
 	}
 
 	return Form(ID("composer"), Method("post"), Action("/posts"), Class(postColumn),
-		data.On("submit", "@post('/posts', "+request+")"),
+		data.On("submit", "@post('/posts', "+request+")"+sent),
 		Input(Type("hidden"), Name("days"), Value(joinDays(props.Days))),
 		Input(Type("hidden"), Name("field"), Value(props.Fresh)),
 		Input(Type("hidden"), Name("token"), Value(props.Token)),
@@ -239,6 +258,10 @@ type PostsProps struct {
 	// Token, if not nil, returns a new token for each form to add a comment that is shown. See
 	// [ComposerProps.Token].
 	Token func() string
+
+	// Focus, if true, has the first post take the keyboard focus when it is put on the page, such as
+	// when it is the first of the earlier posts that were asked for.
+	Focus bool
 }
 
 // DayHeading of the given day: "Today" or "Yesterday" with the date beside it, or the date written out.
@@ -273,6 +296,8 @@ func dayDate(date string) Node {
 // TimelinePosts as they are shown under their day's heading, with the given props. Each has a place for
 // its comments, which is empty until [Comments] fills it, and the form to add one.
 func TimelinePosts(posts []model.TimelinePost, props PostsProps) Node {
+	focus := props.Focus
+
 	return Map(posts, func(p model.TimelinePost) Node {
 		id := p.ID.String()
 
@@ -281,7 +306,14 @@ func TimelinePosts(posts []model.TimelinePost, props PostsProps) Node {
 			token = props.Token()
 		}
 
-		return Article(ID("post-"+id), Data("post", id), Class("mb-9 grid grid-cols-1 gap-y-2 lg:grid-cols-[200px_608px] lg:gap-x-8"),
+		// A post that takes the focus can have it, and takes it when it is on the page.
+		var takesFocus Node
+		if focus {
+			takesFocus = Group{TabIndex("-1"), data.Init("el.focus()")}
+			focus = false
+		}
+
+		return Article(ID("post-"+id), Data("post", id), takesFocus, Class("mb-9 grid grid-cols-1 gap-y-2 lg:grid-cols-[200px_608px] lg:gap-x-8"),
 			Div(Class("flex flex-wrap items-baseline gap-x-3 lg:block"),
 				H3(Class("font-serif text-[28px]/none font-[640] tracking-[-0.005em] wrap-anywhere text-primary-700 lg:text-[36px]/none"), Text(p.AuthorName)),
 				Div(Class("flex items-baseline gap-x-3 text-[15px]/6 text-stone-600 lg:mt-2"),
@@ -295,7 +327,7 @@ func TimelinePosts(posts []model.TimelinePost, props PostsProps) Node {
 				// Opening the comments posts the small form below, found by this element's own ID. So
 				// the post's ID is in the body of the request, not in its URL, and not in the expression.
 				Details(ID("post-"+id+"-thread"), Class("mt-2"),
-					data.On("toggle", "el.open && @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'})"),
+					data.On("toggle", "el.open && @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'})"+sent),
 					Summary(Class("inline-flex cursor-pointer list-none rounded-sm text-[15px]/6 text-stone-600 hover:text-stone-900 [&::-webkit-details-marker]:hidden"),
 						CommentsSummary(p.ID, p.Comments, p.NewComments),
 					),
@@ -416,7 +448,7 @@ func CommentForm(props CommentFormProps) Node {
 	messageID := "post-" + id + "-comment-message"
 
 	return Form(ID("post-"+id+"-comment-form"), Method("post"), Action("/comments"),
-		data.On("submit", "@post('/comments', "+request+")"),
+		data.On("submit", "@post('/comments', "+request+")"+sent),
 		Input(Type("hidden"), Name("post"), Value(id)),
 		Input(Type("hidden"), Name("field"), Value(props.Fresh)),
 		Input(Type("hidden"), Name("token"), Value(props.Token)),
@@ -446,7 +478,7 @@ type EarlierPostsProps struct {
 // The cursor is posted, so that it is not in a URL.
 func EarlierPosts(props EarlierPostsProps) Node {
 	return Form(ID("earlier"), Method("post"), Action("/posts/earlier"), Class(postColumn+" mt-12"),
-		data.On("submit", "@post('/posts/earlier', "+request+")"),
+		data.On("submit", "@post('/posts/earlier', "+request+")"+sent),
 		If(props.Next != "", Group{
 			Input(Type("hidden"), Name("after"), Value(props.Next)),
 			Input(Type("hidden"), Name("days"), Value(joinDays(props.Days))),

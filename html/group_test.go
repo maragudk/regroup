@@ -77,6 +77,24 @@ func TestGroupPage(t *testing.T) {
 		is.Equal(t, 1, found)
 	})
 
+	t.Run("has one polite live region, for what is said to screen readers, with nothing in it at first", func(t *testing.T) {
+		doc, err := nethtml.Parse(strings.NewReader(render(t, html.GroupPage(html.GroupPageProps{GroupName: "The Loft", Now: now}))))
+		is.NotError(t, err)
+
+		var regions []*nethtml.Node
+		for n := range doc.Descendants() {
+			if n.Type == nethtml.ElementNode && (attribute(n, "aria-live") != "" || attribute(n, "role") == "status") {
+				regions = append(regions, n)
+			}
+		}
+		is.Equal(t, 1, len(regions))
+		is.Equal(t, "announcement", attribute(regions[0], "id"))
+		is.Equal(t, "status", attribute(regions[0], "role"))
+		is.Equal(t, "polite", attribute(regions[0], "aria-live"))
+		is.True(t, slices.Contains(strings.Fields(attribute(regions[0], "class")), "sr-only"), attribute(regions[0], "class"))
+		is.True(t, regions[0].FirstChild == nil, "the region is not empty")
+	})
+
 	t.Run("sends every form through Datastar as a form, once, to the path the form itself posts to, and never as a GET", func(t *testing.T) {
 		post := model.TimelinePost{Post: model.Post{ID: "p_1", Created: model.Time{T: now}, Body: "Cake"}, AuthorName: "Signe"}
 		page := render(t, html.GroupPage(html.GroupPageProps{
@@ -107,10 +125,12 @@ func TestGroupPage(t *testing.T) {
 				is.Equal(t, "", attribute(n, "data-on:submit"))
 				is.Equal(t, "details", n.Parent.Data)
 				is.Equal(t, n.Parent.Attr[0].Val+"-open", attribute(n, "id"))
-				is.Equal(t, "el.open && @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'})", attribute(n.Parent, "data-on:toggle"))
+				is.Equal(t, "el.open && @post('/comments/open', {contentType: 'form', selector: '#' + el.id + '-open', retryMaxCount: 0, requestCancellation: 'disabled'}).catch(() => $_failed = true)", attribute(n.Parent, "data-on:toggle"))
 				continue
 			}
-			is.Equal(t, "@post('"+attribute(n, "action")+"', {contentType: 'form', retryMaxCount: 0, requestCancellation: 'disabled'})", attribute(n, "data-on:submit"))
+			// A request that cannot be sent at all fails with an error that would go unhandled. It is
+			// caught, and shown in the failure bar.
+			is.Equal(t, "@post('"+attribute(n, "action")+"', {contentType: 'form', retryMaxCount: 0, requestCancellation: 'disabled'}).catch(() => $_failed = true)", attribute(n, "data-on:submit"))
 		}
 		is.EqualSlice(t, []string{"/posts", "/comments/open", "/comments", "/posts/earlier"}, forms)
 	})
@@ -286,6 +306,47 @@ func TestPrivatePage(t *testing.T) {
 		page := render(t, html.PrivatePage(html.PrivatePageProps{Extra: A(Href("/somewhere"), Text("Somewhere"))}))
 
 		is.True(t, regexp.MustCompile(`<p[^>]*><a href="/somewhere">Somewhere</a></p></main>`).MatchString(page), page)
+	})
+}
+
+func TestAnnouncement(t *testing.T) {
+	t.Run("is the live region with the given words in it, in an element named after what they are about", func(t *testing.T) {
+		is.Equal(t, `<p id="announcement" role="status" aria-live="polite" class="sr-only"><span id="announcement-p_1">Your post is on the timeline.</span></p>`,
+			render(t, html.Announcement("p_1", "Your post is on the timeline.")))
+	})
+
+	t.Run("is the empty live region when there is nothing to say", func(t *testing.T) {
+		is.Equal(t, `<p id="announcement" role="status" aria-live="polite" class="sr-only"></p>`, render(t, html.Announcement("", "")))
+	})
+}
+
+func TestTimelinePosts(t *testing.T) {
+	posts := []model.TimelinePost{
+		{Post: model.Post{ID: "p_1", Created: model.Time{T: now}, Body: "Cake"}, AuthorName: "Signe"},
+		{Post: model.Post{ID: "p_2", Created: model.Time{T: now}, Body: "More cake"}, AuthorName: "Thomas"},
+	}
+
+	t.Run("has the first post take the keyboard focus when it is put on the page, if asked to, and no other", func(t *testing.T) {
+		doc, err := nethtml.Parse(strings.NewReader(render(t, html.TimelinePosts(posts, html.PostsProps{Focus: true}))))
+		is.NotError(t, err)
+
+		var articles []*nethtml.Node
+		for n := range doc.Descendants() {
+			if n.Type == nethtml.ElementNode && n.Data == "article" {
+				articles = append(articles, n)
+			}
+		}
+		is.Equal(t, 2, len(articles))
+		is.Equal(t, "-1", attribute(articles[0], "tabindex"))
+		is.Equal(t, "el.focus()", attribute(articles[0], "data-init"))
+		is.Equal(t, "", attribute(articles[1], "tabindex"))
+		is.Equal(t, "", attribute(articles[1], "data-init"))
+	})
+
+	t.Run("has no post take the focus otherwise", func(t *testing.T) {
+		page := render(t, html.TimelinePosts(posts, html.PostsProps{}))
+		is.True(t, !strings.Contains(page, "tabindex"), page)
+		is.True(t, !strings.Contains(page, "data-init"), page)
 	})
 }
 

@@ -356,6 +356,23 @@ func TestTimeline_post(t *testing.T) {
 		is.EqualSlice(t, []string{"Today Friday 14 March"}, texts(all(doc, tag("h2"))))
 	})
 
+	t.Run("says to screen readers that the post is on the timeline, and moves no focus", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		cookie := a.signIn(t, signe)
+
+		for _, days := range []string{"", "2031-03-14", "2031-03-13"} {
+			patches := a.patches(t, a.post(t, cookie, "/posts", url.Values{"body": {"Cake."}, "days": {days}}, true))
+			is.Equal(t, "Your post is on the timeline.", announced(t, patches), days)
+			for _, p := range patches {
+				is.Equal(t, 0, len(all(p, hasAttr("data-init"))))
+			}
+		}
+
+		patches := a.patches(t, a.post(t, cookie, "/posts", url.Values{"body": {" "}}, true))
+		is.Equal(t, 0, len(all(patches[0], id("announcement"))))
+	})
+
 	t.Run("gives the composer a field of a new identity after a post, so that a page does not keep what was posted in it", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
@@ -829,11 +846,79 @@ func TestTimeline_earlier(t *testing.T) {
 		}
 		is.EqualSlice(t, []string{"Today Friday 14 March", "Yesterday Thursday 13 March", "Wednesday 12 March"}, headings)
 
+		// The first post loaded takes the focus, and no other, whatever day it is on.
+		var focused []string
+		for _, p := range patches {
+			for _, n := range all(p, hasAttr("data-init")) {
+				focused = append(focused, text(one(t, n, hasAttr("data-body"))))
+			}
+		}
+		is.EqualSlice(t, []string{"Thursday 4"}, focused)
+
 		// That was the end of the timeline, so the control to load more goes away.
 		is.Equal(t, "", decoded[2].Selector)
 		earlier = one(t, patches[2], id("earlier"))
 		is.Equal(t, 0, len(all(earlier, tag("button"))))
 		is.Equal(t, 0, len(all(earlier, named("after"))))
+	})
+
+	t.Run("moves the keyboard focus to the first post it loads, and says how many it loaded, and when there are no more", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		for i := range 41 {
+			a.createPost(t, signe, base.Add(-time.Duration(i)*time.Minute), fmt.Sprint("Post ", i))
+		}
+		cookie := a.signIn(t, signe)
+
+		after := attr(one(t, parse(t, a.get(t, cookie, "/").Body.String()), named("after")), "value")
+		for _, expected := range []struct {
+			first, said string
+		}{
+			{first: "Post 20", said: "Loaded 20 earlier posts."},
+			{first: "Post 40", said: "Loaded 1 earlier post. There are no posts before it."},
+		} {
+			patches := a.patches(t, a.post(t, cookie, "/posts/earlier", url.Values{"after": {after}}, true))
+
+			var focused []*nethtml.Node
+			for _, p := range patches {
+				focused = append(focused, all(p, hasAttr("data-init"))...)
+			}
+			is.Equal(t, 1, len(focused))
+			is.Equal(t, "article", focused[0].Data)
+			is.Equal(t, expected.first, text(one(t, focused[0], hasAttr("data-body"))))
+			is.Equal(t, "el.focus()", attr(focused[0], "data-init"))
+			is.Equal(t, "-1", attr(focused[0], "tabindex"))
+
+			is.Equal(t, expected.said, announced(t, patches))
+
+			if earlier := all(patches[len(patches)-1], named("after")); len(earlier) > 0 {
+				after = attr(earlier[0], "value")
+			}
+		}
+	})
+
+	t.Run("says when there turn out to be no earlier posts at all", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base, "Cake.")
+		cookie := a.signIn(t, signe)
+
+		after := model.TimelineCursor{Created: post.Created, Seq: 1}.String()
+		patches := a.patches(t, a.post(t, cookie, "/posts/earlier", url.Values{"after": {after}}, true))
+		is.Equal(t, "There are no earlier posts.", announced(t, patches))
+	})
+
+	t.Run("loads five earlier posts and says so in plural, with no more to come", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		for i := range 25 {
+			a.createPost(t, signe, base.Add(-time.Duration(i)*time.Minute), fmt.Sprint("Post ", i))
+		}
+		cookie := a.signIn(t, signe)
+
+		after := attr(one(t, parse(t, a.get(t, cookie, "/").Body.String()), named("after")), "value")
+		patches := a.patches(t, a.post(t, cookie, "/posts/earlier", url.Values{"after": {after}}, true))
+		is.Equal(t, "Loaded 5 earlier posts. There are no posts before these.", announced(t, patches))
 	})
 
 	t.Run("gives a day one heading across pages when the clocks have gone back past midnight too", func(t *testing.T) {
@@ -1115,6 +1200,19 @@ func TestTimeline_comments(t *testing.T) {
 			is.Equal(t, 0, a.count(t, "comments"))
 		})
 	}
+
+	t.Run("says to screen readers that the comment was added, and nothing when comments are only opened", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
+		cookie := a.signIn(t, signe)
+
+		patches := a.patches(t, a.post(t, cookie, "/comments", url.Values{"post": {post.ID.String()}, "body": {"Yes."}}, true))
+		is.Equal(t, "Your comment was added.", announced(t, patches))
+
+		patches = a.patches(t, a.post(t, cookie, "/comments/open", url.Values{"post": {post.ID.String()}}, true))
+		is.Equal(t, 0, len(all(patches[0], id("announcement"))))
+	})
 
 	t.Run("answers with text even when what it puts back on the page was not", func(t *testing.T) {
 		a := newApp(t)
@@ -2025,6 +2123,22 @@ func (a *app) count(t *testing.T, table string) int {
 	err := a.db.H.Get(t.Context(), &count, "select count(*) from "+table)
 	is.NotError(t, err)
 	return count
+}
+
+// announced is what the given patches say to screen readers: the text of the one live region in them,
+// which has one element in it, named after what the words are about.
+func announced(t *testing.T, patches []*nethtml.Node) string {
+	t.Helper()
+
+	var regions []*nethtml.Node
+	for _, p := range patches {
+		regions = append(regions, all(p, id("announcement"))...)
+	}
+	is.Equal(t, 1, len(regions))
+	is.Equal(t, "status", attr(regions[0], "role"))
+	is.Equal(t, "polite", attr(regions[0], "aria-live"))
+	said := one(t, regions[0], func(n *nethtml.Node) bool { return strings.HasPrefix(attr(n, "id"), "announcement-") })
+	return text(said)
 }
 
 // newToken for a form, as the page has.
