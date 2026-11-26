@@ -52,6 +52,8 @@ const recorded = extract((state) => {
 //     list, a count one higher, as many comments shown as the count says, and an empty field.
 //   - After opening a post's comments: no new-comment mark on the post, no word that they are loading,
 //     as many comments shown as the count says, and as many of them marked new as the count said were.
+//     The same when they are opened again to show an answer that came while they were closed, except
+//     for the marks, which were compared when it came.
 //   - After text that is refused: the message that says why, no new post at the top or a comment count
 //     that has not changed, and the text still in its field.
 //   - After "Earlier posts": more posts, or no button for more and a line that says nothing was posted
@@ -62,7 +64,9 @@ const recorded = extract((state) => {
 export const answersShowWhatWasDone = always(() => recorded.current.wrong.length === 0);
 
 // A form, or a post's comments, sends one request at a time: its button stays off, and opening the
-// comments again sends nothing, until its own request has been answered.
+// comments again sends nothing, until its own request has been answered. Opening a post's comments also
+// sends nothing while a comment on the post is on its way, nor when the answer to an earlier opening
+// came while they were closed, which they then show.
 export const oneRequestAtATime = always(() => recorded.current.twice.length === 0);
 
 // No request from the page fails: Datastar reports no error, and nothing is answered with an HTTP error.
@@ -211,10 +215,23 @@ const reopenComments = registerCustomAction("reopenComments", async (document, w
   details.open = true;
 });
 
+// Opens a post's comments and closes them again as soon as the opening is sent, so that its answer comes
+// while they are closed. Opening them again later shows that answer, and sends nothing. Where opening
+// them sends nothing, it closes them again after a second.
+const closeWhileOpening = registerCustomAction("closeWhileOpening", async (document, window, postID: string) => {
+  const details = document.getElementById("post-" + postID + "-thread");
+  if (!(details instanceof HTMLDetailsElement) || details.open) return;
+  const started = fetched(document, window, details, "started");
+  details.open = true;
+  await started;
+  details.open = false;
+});
+
 // Comments with the given text on a post whose comments are open, and while the comment is on its way,
-// closes and opens the comments again, and presses Comment again once opening them is done, if the
-// comment is still on its way. Its button stays off until the comment's own answer has come, so the
-// second press sends nothing.
+// closes and opens the comments again, and presses Comment again once an opening is done, or after a
+// second, if the comment is still on its way. Opening the comments sends nothing while the comment is on
+// its way, and its button stays off until the comment's own answer has come, so the second press sends
+// nothing either.
 const commentWhileReopening = registerCustomAction("commentWhileReopening", async (document, window, postID: string, text: string) => {
   const details = document.getElementById("post-" + postID + "-thread");
   const form = document.getElementById("post-" + postID + "-comment-form");
@@ -272,6 +289,8 @@ export const exploring = weighted([
   [30, actions(() => openThreads.current.flatMap((postID) => texts(tag(), page.commentMaxLength).map(([text, length]) => writeComment(postID, text, length))))],
   // Opens a post's comments twice in quick succession.
   [10, actions(() => closedThreads.current.map((postID) => reopenComments(postID)))],
+  // Opens a post's comments and closes them before the answer comes.
+  [10, actions(() => closedThreads.current.map((postID) => closeWhileOpening(postID)))],
   // Comments while the post's comments are opened again.
   [10, actions(() => openThreads.current.map((postID) => commentWhileReopening(postID, "While reopening " + tag())))],
   // Loads earlier posts. The button is at the end of the timeline, further down than scrolling often gets.
