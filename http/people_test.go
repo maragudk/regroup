@@ -780,7 +780,7 @@ func TestPeople_members(t *testing.T) {
 	}
 }
 
-func TestPeople_members_again(t *testing.T) {
+func TestPeople_meanwhile(t *testing.T) {
 	t.Run("says nothing is on its way when a form sent again finds its invitation withdrawn, and logs it as sent again", func(t *testing.T) {
 		a := newApp(t)
 		p := seed(t, a)
