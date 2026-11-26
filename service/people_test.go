@@ -635,7 +635,7 @@ func TestFat_people_telemetry(t *testing.T) {
 				attributes = append(attributes, e.Attributes...)
 			}
 			for _, a := range attributes {
-				texts = append(texts, string(a.Key), a.Value.Emit())
+				texts = append(texts, string(a.Key), a.Value.String())
 			}
 			for _, text := range texts {
 				for _, s := range secrets {
