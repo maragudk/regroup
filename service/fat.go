@@ -32,6 +32,7 @@ type Fat struct {
 	createComment func(ctx context.Context, actor model.UserID, postID model.PostID, body string) (model.Comment, error)
 	createPost    func(ctx context.Context, actor model.UserID, body string) (model.Post, error)
 	getComments   func(ctx context.Context, actor model.UserID, postID model.PostID) ([]model.TimelineComment, error)
+	getMembers    func(ctx context.Context, actor model.UserID) (int, error)
 	getTimeline   func(ctx context.Context, actor model.UserID, cursor string, limit int) (model.Timeline, error)
 	getUser       func(ctx context.Context, id model.UserID) (model.User, error)
 }
@@ -67,6 +68,7 @@ func Setup(f *Fat, bucket *s3.Bucket, db *sqlite.Database, sender *postmark.Send
 	CreateComment(f, db, now)
 	CreatePost(f, db, now)
 	GetComments(f, db)
+	GetMembers(f, db)
 	GetTimeline(f, db, now, group)
 	GetUser(f, db)
 }

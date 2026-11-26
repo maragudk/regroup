@@ -16,6 +16,10 @@ COPY html ./html/
 
 RUN ./tailwindcss -i tailwind.css -o app.css --minify
 
+# No page may ask another host for anything. So the build fails if the stylesheet imports anything, or
+# has a url() that is not one of the app's own fonts.
+RUN ! grep -Eo '@import[^;]*|url\([^)]*\)' app.css | grep -Ev '^url\("?fonts/[A-Za-z0-9-]+\.woff2"?\)$'
+
 
 
 FROM golang AS gobuilder

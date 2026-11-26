@@ -4,21 +4,81 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alexedwards/scs/v2"
 	gluehttp "maragu.dev/glue/http"
 	"maragu.dev/is"
 
+	apphttp "app/http"
 	"app/model"
 	"app/preview"
+	"app/service"
 	"app/sqlitetest"
 )
 
+func TestPeopleLink(t *testing.T) {
+	t.Run("links to the list of people, in words for someone who is signed in and for someone who is not", func(t *testing.T) {
+		var b strings.Builder
+		is.NotError(t, preview.PeopleLink(true).Render(&b))
+		is.Equal(t, `<a href="/preview">Switch person</a>`, b.String())
+
+		b.Reset()
+		is.NotError(t, preview.PeopleLink(false).Render(&b))
+		is.Equal(t, `<a href="/preview">This is a preview. Choose someone to sign in as.</a>`, b.String())
+	})
+}
+
 func TestRoutes(t *testing.T) {
+	t.Run("lands the browser on the group page as the person chosen, with a link to switch person, from a group page that said only that it is private", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		loc, err := time.LoadLocation("Europe/Copenhagen")
+		is.NotError(t, err)
+		group := model.Group{Name: "The Loft", TimeZone: loc}
+		now := func() time.Time { return time.Date(2031, 3, 14, 9, 0, 0, 0, time.UTC) }
+		log := slog.New(slog.DiscardHandler)
+
+		fat := service.NewFat(service.NewFatOptions{})
+		service.Setup(fat, nil, db, nil, now, group)
+		_, err = fat.CreatePost(t.Context(), signe.ID, "Cake in the kitchen.")
+		is.NotError(t, err)
+
+		sm := scs.New()
+		r := gluehttp.NewRouter(gluehttp.NewRouterOpts{SM: sm})
+		r.Use(sm.LoadAndSave, gluehttp.Authenticate(log, sm, db))
+		apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{Group: group, Now: now, PreviewLink: preview.PeopleLink})(r)
+		preview.Routes(r, log, db)
+		server := httptest.NewServer(r.Mux)
+		t.Cleanup(server.Close)
+
+		jar, err := cookiejar.New(nil)
+		is.NotError(t, err)
+		client := &http.Client{Jar: jar}
+
+		res, err := client.Get(server.URL + "/")
+		is.NotError(t, err)
+		body := readBody(t, res)
+		is.True(t, strings.Contains(body, "This group is private."), body)
+		is.True(t, strings.Contains(body, `<a href="/preview">This is a preview. Choose someone to sign in as.</a>`), body)
+		is.True(t, !strings.Contains(body, "The Loft") && !strings.Contains(body, "Cake") && !strings.Contains(body, "Signe"), body)
+
+		// The client follows the redirect, as a browser does.
+		res, err = client.PostForm(server.URL+"/preview/sign-in", url.Values{"user": {signe.ID.String()}})
+		is.NotError(t, err)
+		body = readBody(t, res)
+		is.Equal(t, http.StatusOK, res.StatusCode)
+		is.Equal(t, "/", res.Request.URL.Path)
+		is.True(t, strings.Contains(body, "<title>The Loft</title>"), body)
+		is.True(t, strings.Contains(body, "Cake in the kitchen."), body)
+		is.True(t, strings.Contains(body, `<a href="/preview">Switch person</a>`), body)
+	})
+
 	t.Run("lists everyone, and signs the browser in as the one chosen", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")

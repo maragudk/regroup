@@ -24,6 +24,17 @@ cover:
 deps:
 	curl -Lf -o public/scripts/datastar.js https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.3/bundles/datastar.js
 
+# Fetches the fonts the app serves from their own repositories, at fixed commits, with their licences.
+# Source Sans 3 ships as WOFF2. Fraunces ships its variable font as TrueType only, so it is put in a WOFF2
+# container here, which changes nothing in the font itself.
+.PHONY: fonts
+fonts:
+	curl -Lf -o public/styles/fonts/SourceSans3-Regular.woff2 https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/WOFF2/TTF/SourceSans3-Regular.ttf.woff2
+	curl -Lf -o public/styles/fonts/SourceSans3-LICENSE.md https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/LICENSE.md
+	curl -Lf -o public/styles/fonts/Fraunces-OFL.txt https://raw.githubusercontent.com/undercasetype/Fraunces/7ccdec31c6028118dce3e47fe864e3744460371d/OFL.txt
+	curl -Lf -o /tmp/Fraunces.ttf 'https://raw.githubusercontent.com/undercasetype/Fraunces/7ccdec31c6028118dce3e47fe864e3744460371d/fonts/variable/Fraunces%5BSOFT%2CWONK%2Copsz%2Cwght%5D.ttf'
+	uvx --from 'fonttools[woff]' fonttools ttLib.woff2 compress -o public/styles/fonts/Fraunces.woff2 /tmp/Fraunces.ttf
+
 .PHONY: fmt
 fmt:
 	goimports -w -local `head -n 1 go.mod | sed 's/^module //'` .

@@ -30,3 +30,25 @@ func TestGetUser(t *testing.T) {
 		is.Error(t, model.ErrorUserNotFound, err)
 	})
 }
+
+func TestDatabase_CountActiveUsers(t *testing.T) {
+	t.Run("counts nobody in an empty database", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+
+		count, err := db.CountActiveUsers(t.Context())
+		is.NotError(t, err)
+		is.Equal(t, 0, count)
+	})
+
+	t.Run("counts the users who are active, and not the ones who are not", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		sqlitetest.CreateUser(t, db, "Signe")
+		sqlitetest.CreateUser(t, db, "Thomas")
+		amira := sqlitetest.CreateUser(t, db, "Amira")
+		sqlitetest.DeactivateUser(t, db, amira.ID)
+
+		count, err := db.CountActiveUsers(t.Context())
+		is.NotError(t, err)
+		is.Equal(t, 2, count)
+	})
+}

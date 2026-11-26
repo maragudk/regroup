@@ -14,23 +14,33 @@ import (
 	"app/sqlite"
 )
 
+// PeopleLink to the preview's list of people, for someone who is signed in and wants to be someone else,
+// and for someone who is not signed in.
+func PeopleLink(signedIn bool) Node {
+	if signedIn {
+		return A(Href("/preview"), Text("Switch person"))
+	}
+	return A(Href("/preview"), Text("This is a preview. Choose someone to sign in as."))
+}
+
 // Routes of the preview: a list of everyone active in the group at /preview, and signing in as any of
 // them by putting their ID in the session under [gluehttp.SessionUserIDKey].
 func Routes(r *gluehttp.Router, log *slog.Logger, db *sqlite.Database) {
 	r.Get("/preview", func(props html.PageProps) (Node, error) {
 		var users []model.User
 		if err := db.H.Select(props.Ctx, &users, `select * from users where active = 1 order by name`); err != nil {
-			return html.ErrorPage(), err
+			return html.ErrorPage(props), err
 		}
 
-		return html.Page(html.PageProps{Title: "Preview: sign in as"},
+		props.Title = "Preview: sign in as"
+		return html.Page(props,
 			H1(Text("Sign in as")),
-			Ul(
+			Ul(Class("grid gap-2"),
 				Map(users, func(u model.User) Node {
 					return Li(
 						Form(Method("post"), Action("/preview/sign-in"),
 							Input(Type("hidden"), Name("user"), Value(u.ID.String())),
-							Button(Type("submit"), Class("cursor-pointer"), Text(u.Name)),
+							Button(Type("submit"), Class("cursor-pointer underline decoration-stone-400 decoration-1 underline-offset-4 hover:decoration-stone-900"), Text(u.Name)),
 						),
 					)
 				}),
@@ -45,11 +55,11 @@ func Routes(r *gluehttp.Router, log *slog.Logger, db *sqlite.Database) {
 				http.Error(props.W, "no such user", http.StatusBadRequest)
 				return nil, nil
 			}
-			return html.ErrorPage(), err
+			return html.ErrorPage(props), err
 		}
 
 		if err := r.SM.RenewToken(props.Ctx); err != nil {
-			return html.ErrorPage(), err
+			return html.ErrorPage(props), err
 		}
 		r.SM.Put(props.Ctx, gluehttp.SessionUserIDKey, id.String())
 

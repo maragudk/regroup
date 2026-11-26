@@ -1,11 +1,18 @@
 package html_test
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	. "maragu.dev/gomponents"
+	. "maragu.dev/gomponents/html"
+	"maragu.dev/httph"
 	"maragu.dev/is"
 
 	"app/html"
@@ -13,14 +20,14 @@ import (
 
 func TestPage(t *testing.T) {
 	t.Run("loads the Datastar script as a module", func(t *testing.T) {
-		tag := regexp.MustCompile(`<script[^>]*src="/scripts/datastar\.[^"]+\.js"[^>]*>`).FindString(render(t))
+		tag := regexp.MustCompile(`<script[^>]*src="/scripts/datastar\.[^"]+\.js"[^>]*>`).FindString(render(t, html.Page(html.PageProps{Title: "Test"})))
 
 		is.True(t, tag != "", "no Datastar script tag")
 		is.True(t, strings.Contains(tag, `type="module"`), "Datastar script tag is not a module: "+tag)
 	})
 
 	t.Run("loads every script from a path on the app's own origin, and has no inline scripts", func(t *testing.T) {
-		page := render(t)
+		page := render(t, html.Page(html.PageProps{Title: "Test"}))
 		srcs := regexp.MustCompile(`<script[^>]*\ssrc="([^"]*)"`).FindAllStringSubmatch(page, -1)
 
 		is.True(t, len(srcs) > 0, "no script tags with a src found")
@@ -32,10 +39,39 @@ func TestPage(t *testing.T) {
 		}
 	})
 
-	t.Run("renders the Datastar smoke test attribute, with the expression HTML-escaped", func(t *testing.T) {
-		want := `data-init="console.log(&#39;Datastar loaded&#39;)"`
+	t.Run("gives Datastar the nonce of the request's content security policy, and none when the request has none", func(t *testing.T) {
+		var ctx context.Context
+		h := httph.ContentSecurityPolicy(func(opts *httph.ContentSecurityPolicyOptions) {
+			opts.ScriptNonce = true
+		})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			ctx = r.Context()
+		}))
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+		nonce := httph.NonceFromContext(ctx)
+		is.True(t, nonce != "", "no nonce")
 
-		is.True(t, strings.Contains(render(t), want), "no "+want)
+		page := render(t, html.Page(html.PageProps{Title: "Test", Ctx: ctx}))
+		is.True(t, strings.Contains(page, `<html lang="en" class="scheme-light" data-nonce="`+nonce+`">`), page)
+
+		page = render(t, html.Page(html.PageProps{Title: "Test", Ctx: t.Context()}))
+		is.True(t, !strings.Contains(page, "data-nonce"), page)
+
+		page = render(t, html.Page(html.PageProps{Title: "Test"}))
+		is.True(t, !strings.Contains(page, "data-nonce"), page)
+	})
+
+	t.Run("has the given title and body, and a link back to the group", func(t *testing.T) {
+		page := render(t, html.Page(html.PageProps{Title: "Not found"}, H1(Text("Not found"))))
+
+		is.True(t, strings.Contains(page, "<title>Not found</title>"), page)
+		is.True(t, strings.Contains(page, "<h1>Not found</h1>"), page)
+		is.True(t, regexp.MustCompile(`<a [^>]*href="/"[^>]*>Back to the group</a>`).MatchString(page), page)
+	})
+
+	t.Run("asks search engines to leave the page alone, since the group is private", func(t *testing.T) {
+		page := render(t, html.Page(html.PageProps{Title: "Test"}))
+
+		is.True(t, strings.Contains(page, `<meta name="robots" content="noindex">`), page)
 	})
 }
 
@@ -57,11 +93,110 @@ func TestDatastarVersion(t *testing.T) {
 	})
 }
 
-func render(t *testing.T) string {
+// TestFonts guards the promise that no page asks a font host for anything: the fonts are files of the
+// app's own, each with its licence beside it, and the stylesheet and the pages name nothing else.
+func TestFonts(t *testing.T) {
+	fonts := map[string]string{
+		"Fraunces.woff2":            "Fraunces-OFL.txt",
+		"SourceSans3-Regular.woff2": "SourceSans3-LICENSE.md",
+	}
+
+	t.Run("each font is a WOFF2 file with the text of its SIL Open Font License beside it", func(t *testing.T) {
+		for font, licence := range fonts {
+			data, err := os.ReadFile(filepath.Join("../public/styles/fonts", font))
+			is.NotError(t, err)
+			is.Equal(t, "wOF2", string(data[:4]), font)
+
+			text, err := os.ReadFile(filepath.Join("../public/styles/fonts", licence))
+			is.NotError(t, err)
+			is.True(t, strings.Contains(string(text), "SIL OPEN FONT LICENSE Version 1.1"), licence)
+			is.True(t, strings.Contains(string(text), "Copyright"), licence)
+		}
+	})
+
+	t.Run("there is no font file that nothing uses", func(t *testing.T) {
+		var found []string
+		err := filepath.WalkDir("../public", func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			switch filepath.Ext(path) {
+			case ".woff", ".woff2", ".ttf", ".otf", ".eot":
+				found = append(found, filepath.Base(path))
+			}
+			return nil
+		})
+		is.NotError(t, err)
+		is.Equal(t, len(fonts), len(found), strings.Join(found, ", "))
+		for _, font := range found {
+			_, ok := fonts[font]
+			is.True(t, ok, font)
+		}
+	})
+
+	t.Run("the pages preload exactly these fonts, from the path the stylesheet loads them from", func(t *testing.T) {
+		page := render(t, html.Page(html.PageProps{Title: "Test"}))
+
+		preloads := regexp.MustCompile(`<link rel="preload" href="([^"]*)" as="font" type="font/woff2" crossorigin="anonymous">`).FindAllStringSubmatch(page, -1)
+		is.Equal(t, len(fonts), len(preloads))
+		for _, preload := range preloads {
+			dir, font := filepath.Split(preload[1])
+			is.Equal(t, "/styles/fonts/", dir)
+			_, ok := fonts[font]
+			is.True(t, ok, font)
+		}
+	})
+}
+
+// TestStylesheet guards the same promise for the stylesheet. The built stylesheet is not in the
+// repository, so this checks everything it is built from: its source, and the Go files that Tailwind
+// reads class names from. The Dockerfile checks the built stylesheet itself.
+func TestStylesheet(t *testing.T) {
+	t.Run("its source loads nothing but the app's own fonts, and imports nothing but Tailwind", func(t *testing.T) {
+		source, err := os.ReadFile("../tailwind.css")
+		is.NotError(t, err)
+
+		urls := regexp.MustCompile(`url\(([^)]*)\)`).FindAllStringSubmatch(string(source), -1)
+		is.Equal(t, 2, len(urls))
+		for _, u := range urls {
+			is.True(t, regexp.MustCompile(`^"fonts/[A-Za-z0-9-]+\.woff2"$`).MatchString(u[1]), u[1])
+
+			_, err := os.Stat(filepath.Join("../public/styles", strings.Trim(u[1], `"`)))
+			is.NotError(t, err)
+		}
+
+		imports := regexp.MustCompile(`@import[^;]*;`).FindAllString(string(source), -1)
+		is.EqualSlice(t, []string{`@import "tailwindcss";`}, imports)
+
+		is.True(t, !strings.Contains(string(source), "//"), "the source names a scheme or a host")
+	})
+
+	t.Run("no class in the Go files that Tailwind reads can put a URL or an import into it", func(t *testing.T) {
+		var files int
+		for _, dir := range []string{"../html", "../preview", "../http", "../cmd/app"} {
+			paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
+			is.NotError(t, err)
+			for _, path := range paths {
+				if strings.HasSuffix(path, "_test.go") {
+					continue
+				}
+				files++
+
+				source, err := os.ReadFile(path)
+				is.NotError(t, err)
+				is.True(t, !strings.Contains(string(source), "url("), path+" has a url( in it")
+				is.True(t, !strings.Contains(string(source), "@import"), path+" has an @import in it")
+			}
+		}
+		is.True(t, files > 5, "expected to have read the Go files")
+	})
+}
+
+func render(t *testing.T, n Node) string {
 	t.Helper()
 
 	var b strings.Builder
-	err := html.Page(html.PageProps{Title: "Test"}).Render(&b)
+	err := n.Render(&b)
 	is.NotError(t, err)
 	return b.String()
 }

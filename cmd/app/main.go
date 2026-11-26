@@ -21,6 +21,7 @@ import (
 	"maragu.dev/glue/s3"
 	"maragu.dev/glue/sql"
 	"maragu.dev/glue/sqlitestore"
+	"maragu.dev/gomponents"
 
 	"app/html"
 	"app/http"
@@ -40,6 +41,10 @@ var defaultGroupName = "Our group"
 // setupPreview is set only in the preview build, by the file behind the preview build tag. It seeds an
 // empty database and returns what adds the preview's routes.
 var setupPreview func(ctx context.Context, log *slog.Logger, db *sqlite.Database, now func() time.Time, group model.Group) (func(*gluehttp.Router), error)
+
+// previewLink is set only in the preview build, by the file behind the preview build tag. It returns the
+// link to the preview's list of people that pages show.
+var previewLink func(signedIn bool) gomponents.Node
 
 func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
 	databaseLog := log.With("component", "sql.Database")
@@ -133,7 +138,11 @@ func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
 	})
 	service.Setup(svc, bucket, db, sender, time.Now, group)
 
-	routerInjector := http.InjectHTTPRouter(log, svc)
+	routerInjector := http.InjectHTTPRouter(log, svc, http.InjectHTTPRouterOptions{
+		Group:       group,
+		Now:         time.Now,
+		PreviewLink: previewLink,
+	})
 	if setupPreview != nil {
 		previewInjector, err := setupPreview(ctx, log, db, time.Now, group)
 		if err != nil {
@@ -154,7 +163,7 @@ func start(ctx context.Context, log *slog.Logger, eg app.Goer) error {
 	server := gluehttp.NewServer(gluehttp.NewServerOptions{
 		Address:            address,
 		BaseURL:            baseURL,
-		CSP:                http.CSP(env.GetBoolOrDefault("CSP_ALLOW_UNSAFE_INLINE", false), env.GetBoolOrDefault("CSP_ALLOW_UNSAFE_EVAL", false)),
+		CSP:                http.CSP(env.GetBoolOrDefault("CSP_ALLOW_UNSAFE_INLINE", false)),
 		HTMLPage:           html.Page,
 		HTTPRouterInjector: routerInjector,
 		Log:                log.With("component", "http.Server"),

@@ -1,10 +1,9 @@
 package http_test
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"slices"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -16,55 +15,66 @@ import (
 
 func TestCSP(t *testing.T) {
 	for _, allowUnsafeInline := range []bool{false, true} {
-		for _, allowUnsafeEval := range []bool{false, true} {
-			t.Run(fmt.Sprintf("allows no other origin in any directive, with unsafe inline %v and unsafe eval %v", allowUnsafeInline, allowUnsafeEval), func(t *testing.T) {
-				for directive, sources := range policy(t, allowUnsafeInline, allowUnsafeEval) {
-					for source := range strings.FieldsSeq(sources) {
-						is.True(t, slices.Contains([]string{"'self'", "'none'", "'unsafe-inline'", "'unsafe-eval'"}, source),
-							"unexpected source in "+directive+": "+source)
-					}
+		name := "allows no other origin in any directive, and never the evaluation of strings as scripts, with unsafe inline "
+		t.Run(name+map[bool]string{false: "off", true: "on"}[allowUnsafeInline], func(t *testing.T) {
+			directives, nonce := policy(t, allowUnsafeInline)
+
+			for directive, sources := range directives {
+				for source := range strings.FieldsSeq(sources) {
+					allowed := source == "'self'" || source == "'none'" ||
+						(source == "'nonce-"+nonce+"'" && directive == "script-src") ||
+						(source == "'unsafe-inline'" && directive == "style-src" && allowUnsafeInline)
+					is.True(t, allowed, "unexpected source in "+directive+": "+source)
 				}
-			})
-		}
+			}
+		})
 	}
 
 	t.Run("denies everything by default and allows the app's own origin for what it needs", func(t *testing.T) {
-		directives := policy(t, false, false)
+		directives, _ := policy(t, false)
 
 		is.Equal(t, "'none'", directives["default-src"])
-		for _, directive := range []string{"connect-src", "font-src", "img-src", "manifest-src", "script-src", "style-src"} {
+		for _, directive := range []string{"connect-src", "font-src", "img-src", "manifest-src", "style-src"} {
 			is.Equal(t, "'self'", directives[directive], directive)
 		}
 	})
 
-	tests := []struct {
-		allowUnsafeInline, allowUnsafeEval bool
-		scriptSrc, styleSrc                string
-	}{
-		{false, false, "'self'", "'self'"},
-		{true, false, "'self' 'unsafe-inline'", "'self' 'unsafe-inline'"},
-		{false, true, "'self' 'unsafe-eval'", "'self'"},
-		{true, true, "'self' 'unsafe-inline' 'unsafe-eval'", "'self' 'unsafe-inline'"},
-	}
-	for _, test := range tests {
-		t.Run(fmt.Sprintf("adds unsafe inline to scripts and styles, and unsafe eval to scripts only, with unsafe inline %v and unsafe eval %v", test.allowUnsafeInline, test.allowUnsafeEval), func(t *testing.T) {
-			directives := policy(t, test.allowUnsafeInline, test.allowUnsafeEval)
+	t.Run("allows scripts from the app's own origin and with the nonce of the response, which is new each time", func(t *testing.T) {
+		directives, nonce := policy(t, false)
+		is.True(t, regexp.MustCompile(`^[A-Za-z0-9]{20,}$`).MatchString(nonce), nonce)
+		is.Equal(t, "'self' 'nonce-"+nonce+"'", directives["script-src"])
 
-			is.Equal(t, test.scriptSrc, directives["script-src"], "script-src")
-			is.Equal(t, test.styleSrc, directives["style-src"], "style-src")
-		})
-	}
+		_, other := policy(t, false)
+		is.True(t, nonce != other, "the same nonce twice")
+	})
+
+	t.Run("adds unsafe inline to styles only", func(t *testing.T) {
+		directives, nonce := policy(t, true)
+
+		is.Equal(t, "'self' 'unsafe-inline'", directives["style-src"])
+		is.Equal(t, "'self' 'nonce-"+nonce+"'", directives["script-src"])
+	})
 }
 
-// policy served with [apphttp.CSP], as a map from directive name to its sources.
-func policy(t *testing.T, allowUnsafeInline, allowUnsafeEval bool) map[string]string {
+// policy served with [apphttp.CSP], as a map from directive name to its sources, and the nonce the
+// handler behind it was given.
+func policy(t *testing.T, allowUnsafeInline bool) (map[string]string, string) {
 	t.Helper()
 
-	h := httph.ContentSecurityPolicy(apphttp.CSP(allowUnsafeInline, allowUnsafeEval))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	var nonce string
+	h := httph.ContentSecurityPolicy(apphttp.CSP(allowUnsafeInline))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		nonce = httph.NonceFromContext(r.Context())
+	}))
 	res := httptest.NewRecorder()
 	h.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	csp := res.Header().Get("Content-Security-Policy")
+	return directives(t, res.Header().Get("Content-Security-Policy")), nonce
+}
+
+// directives of the given Content-Security-Policy header, as a map from directive name to its sources.
+func directives(t *testing.T, csp string) map[string]string {
+	t.Helper()
+
 	is.True(t, csp != "", "no Content-Security-Policy header")
 
 	directives := map[string]string{}

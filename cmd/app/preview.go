@@ -19,6 +19,7 @@ import (
 
 func init() {
 	defaultGroupName = "The Loft"
+	previewLink = preview.PeopleLink
 
 	setupPreview = func(ctx context.Context, log *slog.Logger, db *sqlite.Database, now func() time.Time, group model.Group) (func(*gluehttp.Router), error) {
 		log.WarnContext(ctx, "This is the preview build: anyone can sign in as anyone at /preview")

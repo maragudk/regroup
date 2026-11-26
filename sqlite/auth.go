@@ -33,6 +33,15 @@ func (d *Database) IsUserActive(ctx context.Context, id model.UserID) (bool, err
 	return active, nil
 }
 
+// CountActiveUsers, who are the members of the group.
+func (d *Database) CountActiveUsers(ctx context.Context) (int, error) {
+	var count int
+	if err := d.H.Get(ctx, &count, `select count(*) from users where active = 1`); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (d *Database) GetPermissions(ctx context.Context, id model.UserID) ([]model.Permission, error) {
 	var permissions []model.Permission
 	query := `
