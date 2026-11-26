@@ -46,6 +46,9 @@ The page a member opens: the group's timeline. Agreed with Markus on 2026-11-26.
 - The not-found page is sent without `Cache-Control: no-store`. It shows nothing of the group. Fixing it needs a change in glue.
 - After posting or commenting with the keyboard, the focus falls back to the page, because the button that was pressed is turned off while the request is on its way.
 - The icon is a fixed orange square, so it will not follow a configured accent colour.
+- A form sent again with the same token gets what the first sending made, even if the text was changed in between. The changed text is lost without a word. The same post sent again is shown without the comments it got in the meantime, until a reload.
+- After a post, the answer replaces the composer before it adds the post. If the answer breaks off in between, the field is empty, the post is not on the page, and the form has a new token, so writing it again makes a second post.
+- Fraunces is served as TrueType, 384,052 bytes against 210,032 as WOFF2, and the compression in glue does not cover `font/ttf`, so it goes out uncompressed.
 
 ## Not in the first build
 

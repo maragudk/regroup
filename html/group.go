@@ -126,15 +126,12 @@ const request = "{contentType: 'form', retryMaxCount: 0, requestCancellation: 'd
 // shows every other failure.
 const sent = ".catch(() => $_failed = true)"
 
-// AnnouncementID of the live region that says things to screen readers.
-const AnnouncementID = "announcement"
-
 // Announcement says the given text to screen readers, politely, in the live region every group page has.
 // The text is in an element named after the given key, which says what it is about, so that the same
 // words about something else are said again. With no text, it is the empty live region.
 func Announcement(key, text string) Node {
-	return P(ID(AnnouncementID), Role("status"), Aria("live", "polite"), Class("sr-only"),
-		If(text != "", Span(ID(AnnouncementID+"-"+key), Text(text))),
+	return P(ID("announcement"), Role("status"), Aria("live", "polite"), Class("sr-only"),
+		If(text != "", Span(ID("announcement-"+key), Text(text))),
 	)
 }
 
@@ -255,12 +252,12 @@ func TimelineDay(day model.TimelineDay, now time.Time, props PostsProps) Node {
 
 // PostsProps is what posts on the timeline are shown with.
 type PostsProps struct {
-	// Token, if not nil, returns a new token for each form to add a comment that is shown. See
-	// [ComposerProps.Token].
+	// Token returns a new token for each form to add a comment that is shown. See [ComposerProps.Token].
+	// If it is nil, the forms have no token, and cannot be sent.
 	Token func() string
 
-	// Focus, if true, has the first post take the keyboard focus when it is put on the page, such as
-	// when it is the first of the earlier posts that were asked for.
+	// Focus, if true, has the first post take the keyboard focus when it is put on the page, unless the
+	// focus is in a field or on a control other than the one that loads earlier posts.
 	Focus bool
 }
 
@@ -306,10 +303,12 @@ func TimelinePosts(posts []model.TimelinePost, props PostsProps) Node {
 			token = props.Token()
 		}
 
-		// A post that takes the focus can have it, and takes it when it is on the page.
+		// A post that takes the focus can have it, and takes it when it is on the page, unless the person
+		// put the focus somewhere while waiting, such as in a field: anywhere but on nothing, or on the
+		// control that loads earlier posts.
 		var takesFocus Node
 		if focus {
-			takesFocus = Group{TabIndex("-1"), data.Init("el.focus()")}
+			takesFocus = Group{TabIndex("-1"), data.Init("(document.activeElement === document.body || !!document.activeElement?.closest('#earlier')) && el.focus()")}
 			focus = false
 		}
 

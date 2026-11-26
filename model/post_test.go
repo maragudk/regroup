@@ -1,6 +1,7 @@
 package model_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
@@ -33,6 +34,7 @@ func TestCleanPostBody(t *testing.T) {
 		{name: "keeps invisible formatting characters next to visible ones", input: "👩\u200d💻 shipped", expected: "👩\u200d💻 shipped"},
 		{name: "refuses a body of only Hangul fillers", input: "\u3164\uffa0\u115f\u1160", err: model.ErrorBodyEmpty},
 		{name: "refuses a body of only the Braille blank", input: "\u2800 \u2800", err: model.ErrorBodyEmpty},
+		{name: "refuses a body of only other characters that are drawn blank", input: "\U0001d159\U00013441\U00013442\U00016fe4", err: model.ErrorBodyEmpty},
 		{name: "refuses a body of only variation selectors and the combining grapheme joiner", input: "\ufe0f\U000e0100\u034f\u180b", err: model.ErrorBodyEmpty},
 		{name: "refuses a body of only tag characters and the Mongolian vowel separator", input: "\U000e0001\U000e0067\U000e007f\u180e", err: model.ErrorBodyEmpty},
 		{name: "refuses a body of only default-ignorable code points that are not assigned yet", input: "\u2065\ufff0\U000e0fff", err: model.ErrorBodyEmpty},
@@ -70,7 +72,7 @@ func TestCleanPostBody(t *testing.T) {
 		})
 	})
 
-	t.Run("refuses as empty any text of only white space, default-ignorable code points, and the Braille blank", func(t *testing.T) {
+	t.Run("refuses as empty any text of only white space, default-ignorable code points, and characters drawn blank", func(t *testing.T) {
 		hegel.Test(t, func(ht *hegel.T) {
 			input := string(hegel.Draw(ht, hegel.Lists(blankRune()).MaxSize(30)))
 
@@ -228,32 +230,38 @@ var defaultIgnorable = []struct{ lo, hi rune }{
 	{0x1D173, 0x1D17A}, {0xE0000, 0xE0FFF},
 }
 
-// whiteSpace characters, as Unicode's PropList.txt lists them, without the controls among them, which a
-// body may not hold other than line feeds and tabs.
-var whiteSpace = []rune{
-	'\t', '\n', ' ', 0x00A0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008,
-	0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
+// drawnBlank characters are drawn as nothing, though Unicode does not class them as ignorable: the Braille
+// pattern blank, the musical null notehead, the Egyptian hieroglyph full and half blanks, and the Khitan
+// small script filler.
+var drawnBlank = []rune{0x2800, 0x1D159, 0x13441, 0x13442, 0x16FE4}
+
+// drawnFormat characters are format characters that are drawn, such as the Arabic number sign: the
+// prepended concatenation marks, as Unicode's PropList.txt lists them.
+var drawnFormat = []struct{ lo, hi rune }{
+	{0x0600, 0x0605}, {0x06DD, 0x06DD}, {0x070F, 0x070F}, {0x0890, 0x0891}, {0x08E2, 0x08E2},
+	{0x110BD, 0x110BD}, {0x110CD, 0x110CD},
 }
 
-// brailleBlank is drawn as nothing, though Unicode does not class it as ignorable.
-const brailleBlank = 0x2800
-
 // blank reports whether a body made only of the given character would show nothing: it is white space,
-// default-ignorable, the Braille blank, or another format character that is not drawn. Format characters
-// that are drawn, such as the Arabic number sign, are the prepended concatenation marks.
+// default-ignorable, drawn blank, or a format character that is not drawn.
 func blank(r rune) bool {
-	for _, d := range defaultIgnorable {
-		if d.lo <= r && r <= d.hi {
-			return true
-		}
+	in := func(ranges []struct{ lo, hi rune }) bool {
+		return slices.ContainsFunc(ranges, func(d struct{ lo, hi rune }) bool { return d.lo <= r && r <= d.hi })
 	}
-	return unicode.Is(unicode.White_Space, r) || r == brailleBlank ||
-		(unicode.Is(unicode.Cf, r) && !unicode.Is(unicode.Prepended_Concatenation_Mark, r))
+	return in(defaultIgnorable) || unicode.Is(unicode.White_Space, r) || slices.Contains(drawnBlank, r) ||
+		(unicode.Is(unicode.Cf, r) && !in(drawnFormat))
 }
 
 // blankRune that a body may hold, but that shows nothing: white space other than carriage returns, a
-// default-ignorable code point, or the Braille blank.
+// default-ignorable code point, or a character drawn blank.
 func blankRune() hegel.Generator[rune] {
+	// White space, as Unicode's PropList.txt lists it, without the controls among it, which a body may not
+	// hold other than line feeds and tabs.
+	whiteSpace := []rune{
+		'\t', '\n', ' ', 0x00A0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008,
+		0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
+	}
+
 	return hegel.Composite(func(tc hegel.TestCase) rune {
 		switch hegel.Draw(tc, hegel.Integers(0, 2)) {
 		case 0:
@@ -262,7 +270,7 @@ func blankRune() hegel.Generator[rune] {
 			d := hegel.Draw(tc, hegel.SampledFrom(defaultIgnorable))
 			return rune(hegel.Draw(tc, hegel.Integers(int(d.lo), int(d.hi))))
 		default:
-			return brailleBlank
+			return hegel.Draw(tc, hegel.SampledFrom(drawnBlank))
 		}
 	})
 }

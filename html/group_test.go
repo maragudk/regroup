@@ -338,7 +338,8 @@ func TestTimelinePosts(t *testing.T) {
 		}
 		is.Equal(t, 2, len(articles))
 		is.Equal(t, "-1", attribute(articles[0], "tabindex"))
-		is.Equal(t, "el.focus()", attribute(articles[0], "data-init"))
+		// The focus moves unless the person has put it somewhere while waiting, such as in a field.
+		is.Equal(t, "(document.activeElement === document.body || !!document.activeElement?.closest('#earlier')) && el.focus()", attribute(articles[0], "data-init"))
 		is.Equal(t, "", attribute(articles[1], "tabindex"))
 		is.Equal(t, "", attribute(articles[1], "data-init"))
 	})

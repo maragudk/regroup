@@ -103,10 +103,15 @@ func TestDatabase_CreatePost(t *testing.T) {
 			sends := hegel.Draw(ht, hegel.Lists(submission(len(people))).MinSize(1).MaxSize(20))
 
 			first := map[submitted]model.Post{}
+			var untokened int
 			for i, s := range sends {
 				p, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: people[s.author].ID, Body: fmt.Sprint("Send ", i)}, s.token)
 				if err != nil {
 					ht.Fatalf("send %v of %+v failed: %v", i, s, err)
+				}
+				if s.token == "" {
+					untokened++
+					continue
 				}
 				if f, ok := first[s]; ok && f != p {
 					ht.Fatalf("send %v of %+v gave %+v, not what the first send gave, %+v", i, s, p, f)
@@ -115,8 +120,8 @@ func TestDatabase_CreatePost(t *testing.T) {
 					first[s] = p
 				}
 			}
-			if n := count(ht, db, "posts"); n != len(first) {
-				ht.Fatalf("%v sends of %v submissions stored %v posts", len(sends), len(first), n)
+			if n := count(ht, db, "posts"); n != len(first)+untokened {
+				ht.Fatalf("%v sends of %v submissions with tokens and %v without stored %v posts", len(sends), len(first), untokened, n)
 			}
 		})
 	})
@@ -184,6 +189,28 @@ func TestDatabase_CreateComment(t *testing.T) {
 		is.Equal(t, 4, count(t, db, "comments"))
 	})
 
+	t.Run("makes one comment however many times the same token is sent at once", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		p := createPost(t, db, signe, base)
+
+		comments := make([]model.Comment, 8)
+		errs := make([]error, len(comments))
+		var wg sync.WaitGroup
+		for i := range comments {
+			wg.Go(func() {
+				comments[i], errs[i] = db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: base}, PostID: p.ID, AuthorID: signe.ID, Body: fmt.Sprint("Yes ", i)}, "q6urq6urq6urq6urq6urqw")
+			})
+		}
+		wg.Wait()
+
+		for i := range comments {
+			is.NotError(t, errs[i])
+			is.Equal(t, comments[0], comments[i])
+		}
+		is.Equal(t, 1, count(t, db, "comments"))
+	})
+
 	t.Run("makes exactly one comment for each author and token, however often and in whatever order each is sent", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		people := []model.User{sqlitetest.CreateUser(t, db, "Signe"), sqlitetest.CreateUser(t, db, "Thomas")}
@@ -196,10 +223,15 @@ func TestDatabase_CreateComment(t *testing.T) {
 			sends := hegel.Draw(ht, hegel.Lists(submission(len(people))).MinSize(1).MaxSize(20))
 
 			first := map[submitted]model.Comment{}
+			var untokened int
 			for i, s := range sends {
 				c, err := db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: base}, PostID: p.ID, AuthorID: people[s.author].ID, Body: fmt.Sprint("Send ", i)}, s.token)
 				if err != nil {
 					ht.Fatalf("send %v of %+v failed: %v", i, s, err)
+				}
+				if s.token == "" {
+					untokened++
+					continue
 				}
 				if f, ok := first[s]; ok && f != c {
 					ht.Fatalf("send %v of %+v gave %+v, not what the first send gave, %+v", i, s, c, f)
@@ -208,8 +240,8 @@ func TestDatabase_CreateComment(t *testing.T) {
 					first[s] = c
 				}
 			}
-			if n := count(ht, db, "comments"); n != len(first) {
-				ht.Fatalf("%v sends of %v submissions stored %v comments", len(sends), len(first), n)
+			if n := count(ht, db, "comments"); n != len(first)+untokened {
+				ht.Fatalf("%v sends of %v submissions with tokens and %v without stored %v comments", len(sends), len(first), untokened, n)
 			}
 		})
 	})
@@ -827,16 +859,40 @@ func TestFormTokenMigration(t *testing.T) {
 		is.NotError(t, err)
 		_, err = db.H.DB.ExecContext(t.Context(), `insert into posts (id, seq, created, author_id, body) values ('p_before', 1, '2026-11-26T09:00:00.000Z', ?, 'Before')`, signe.ID)
 		is.NotError(t, err)
-
-		is.NotError(t, migrate.Up(t.Context(), db.H.DB.DB, migrations))
-		p, err := db.GetPost(t.Context(), "p_before")
+		_, err = db.H.DB.ExecContext(t.Context(), `insert into comments (id, seq, created, post_id, author_id, body) values ('c_before', 1, '2026-11-26T09:00:00.000Z', 'p_before', ?, 'Before too')`, signe.ID)
 		is.NotError(t, err)
-		is.Equal(t, "Before", p.Body)
 
-		is.NotError(t, migrate.To(t.Context(), db.H.DB.DB, migrations, "1795703426-timeline"))
-		is.NotError(t, migrate.Up(t.Context(), db.H.DB.DB, migrations))
+		// Both stay through the migration, down again, and up again.
+		for _, to := range []func() error{
+			func() error { return migrate.Up(t.Context(), db.H.DB.DB, migrations) },
+			func() error { return migrate.To(t.Context(), db.H.DB.DB, migrations, "1795703426-timeline") },
+			func() error { return migrate.Up(t.Context(), db.H.DB.DB, migrations) },
+		} {
+			is.NotError(t, to())
+			is.Equal(t, 1, count(t, db, "posts where id = 'p_before' and body = 'Before'"))
+			is.Equal(t, 1, count(t, db, "comments where id = 'c_before' and body = 'Before too'"))
+		}
+
 		_, err = db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: signe.ID, Body: "After"}, "q6urq6urq6urq6urq6urqw")
 		is.NotError(t, err)
+	})
+
+	t.Run("refuses a second post or comment by the same author with the same token, and an empty token, in the schema itself", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		insertPost := `insert into posts (seq, created, author_id, body, form_token) values (?, '2026-11-26T09:00:00.000Z', ?, 'Cake', ?)`
+		insertComment := `insert into comments (seq, created, post_id, author_id, body, form_token) values (?, '2026-11-26T09:00:00.000Z', 'p_1', ?, 'Yes', ?)`
+
+		_, err := db.H.DB.ExecContext(t.Context(), `insert into posts (id, seq, created, author_id, body) values ('p_1', 100, '2026-11-26T09:00:00.000Z', ?, 'Cake')`, signe.ID)
+		is.NotError(t, err)
+		for _, insert := range []string{insertPost, insertComment} {
+			_, err = db.H.DB.ExecContext(t.Context(), insert, 1, signe.ID, "q6urq6urq6urq6urq6urqw")
+			is.NotError(t, err)
+			_, err = db.H.DB.ExecContext(t.Context(), insert, 2, signe.ID, "q6urq6urq6urq6urq6urqw")
+			is.True(t, err != nil && strings.Contains(err.Error(), "UNIQUE"), fmt.Sprint(err))
+			_, err = db.H.DB.ExecContext(t.Context(), insert, 3, signe.ID, "")
+			is.True(t, err != nil && strings.Contains(err.Error(), "CHECK"), fmt.Sprint(err))
+		}
 	})
 }
 
@@ -847,12 +903,12 @@ type submitted struct {
 }
 
 // submission by one of the given number of people, with one of a few tokens, so that the same one comes
-// up again often. Sometimes it has no token, which is never the same submission as another.
+// up again often. Sometimes it has no token, which makes every send of it a submission of its own.
 func submission(people int) hegel.Generator[submitted] {
 	return hegel.Composite(func(tc hegel.TestCase) submitted {
 		return submitted{
 			author: hegel.Draw(tc, hegel.Integers(0, people-1)),
-			token:  hegel.Draw(tc, hegel.SampledFrom([]model.FormToken{"q6urq6urq6urq6urq6urqw", "AAAAAAAAAAAAAAAAAAAAAA", "-_-_-_-_-_-_-_-_-_-_-w"})),
+			token:  hegel.Draw(tc, hegel.SampledFrom([]model.FormToken{"q6urq6urq6urq6urq6urqw", "AAAAAAAAAAAAAAAAAAAAAA", "-_-_-_-_-_-_-_-_-_-_-w", ""})),
 		}
 	})
 }

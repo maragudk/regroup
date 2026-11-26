@@ -364,6 +364,15 @@ func TestTimeline_post(t *testing.T) {
 		for _, days := range []string{"", "2031-03-14", "2031-03-13"} {
 			patches := a.patches(t, a.post(t, cookie, "/posts", url.Values{"body": {"Cake."}, "days": {days}}, true))
 			is.Equal(t, "Your post is on the timeline.", announced(t, patches), days)
+
+			// The words are in an element named after the post, so that the next post's are said too.
+			var article *nethtml.Node
+			for _, p := range patches {
+				if found := all(p, tag("article")); len(found) == 1 {
+					article = found[0]
+				}
+			}
+			is.Equal(t, 1, len(all(patches[0], id("announcement-"+attr(article, "data-post")))), days)
 			for _, p := range patches {
 				is.Equal(t, 0, len(all(p, hasAttr("data-init"))))
 			}
@@ -757,28 +766,36 @@ func TestTimeline_again(t *testing.T) {
 				path   string
 				values url.Values
 			}
+			// The tokens are drawn too, so that a failure can be replayed.
+			token := func() string {
+				t, err := model.NewFormToken(bytes.NewReader(hegel.Draw(ht, hegel.Binary(16, 16))))
+				is.NotError(ht, err)
+				return t.String()
+			}
 			var forms []form
 			for range hegel.Draw(ht, hegel.Integers(1, 3)) {
-				forms = append(forms, form{path: "/posts", values: url.Values{"body": {"Cake."}, "token": {newToken(ht)}}})
+				forms = append(forms, form{path: "/posts", values: url.Values{"body": {"Cake."}, "token": {token()}}})
 			}
 			for range hegel.Draw(ht, hegel.Integers(0, 3)) {
-				forms = append(forms, form{path: "/comments", values: url.Values{"body": {"Yes."}, "token": {newToken(ht)}, "post": {post.ID.String()}}})
+				forms = append(forms, form{path: "/comments", values: url.Values{"body": {"Yes."}, "token": {token()}, "post": {post.ID.String()}}})
 			}
 
 			sends := hegel.Draw(ht, hegel.Lists(hegel.Integers(0, len(forms)-1)).MinSize(1).MaxSize(15))
-			sent := map[int]bool{}
+			type submission struct{ path, token string }
+			sent := map[submission]bool{}
 			for _, i := range sends {
 				datastar := hegel.Draw(ht, hegel.Booleans())
 				res := a.post(t, cookie, forms[i].path, forms[i].values, datastar)
 				if want := map[bool]int{true: http.StatusOK, false: http.StatusSeeOther}[datastar]; res.Code != want {
 					ht.Fatalf("sending %v answered %v, not %v", forms[i].path, res.Code, want)
 				}
-				sent[i] = true
+				// Two forms of a kind with the same token, which drawing can give, are one submission.
+				sent[submission{path: forms[i].path, token: forms[i].values.Get("token")}] = true
 			}
 
 			var posts, comments int
-			for i := range sent {
-				if forms[i].path == "/posts" {
+			for s := range sent {
+				if s.path == "/posts" {
 					posts++
 				} else {
 					comments++
@@ -886,7 +903,7 @@ func TestTimeline_earlier(t *testing.T) {
 			is.Equal(t, 1, len(focused))
 			is.Equal(t, "article", focused[0].Data)
 			is.Equal(t, expected.first, text(one(t, focused[0], hasAttr("data-body"))))
-			is.Equal(t, "el.focus()", attr(focused[0], "data-init"))
+			is.True(t, strings.HasSuffix(attr(focused[0], "data-init"), "el.focus()"), attr(focused[0], "data-init"))
 			is.Equal(t, "-1", attr(focused[0], "tabindex"))
 
 			is.Equal(t, expected.said, announced(t, patches))
@@ -895,6 +912,31 @@ func TestTimeline_earlier(t *testing.T) {
 				after = attr(earlier[0], "value")
 			}
 		}
+	})
+
+	t.Run("moves the focus to the first post it loads when that is under a day heading it brings", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		for i := range 20 {
+			a.createPost(t, signe, base.Add(-time.Duration(i)*time.Minute), fmt.Sprint("Today ", i))
+		}
+		for i := range 3 {
+			a.createPost(t, signe, base.Add(-24*time.Hour-time.Duration(i)*time.Minute), fmt.Sprint("Yesterday ", i))
+		}
+		cookie := a.signIn(t, signe)
+
+		after := attr(one(t, parse(t, a.get(t, cookie, "/").Body.String()), named("after")), "value")
+		res := a.post(t, cookie, "/posts/earlier", url.Values{"after": {after}, "days": {"2031-03-14"}}, true)
+		decoded, patches := a.decode(t, res), a.patches(t, res)
+		is.Equal(t, "#timeline", decoded[0].Selector)
+
+		var focused []string
+		for _, p := range patches {
+			for _, n := range all(p, hasAttr("data-init")) {
+				focused = append(focused, text(one(t, n, hasAttr("data-body"))))
+			}
+		}
+		is.EqualSlice(t, []string{"Yesterday 0"}, focused)
 	})
 
 	t.Run("says when there turn out to be no earlier posts at all", func(t *testing.T) {
@@ -1207,10 +1249,20 @@ func TestTimeline_comments(t *testing.T) {
 		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
 		cookie := a.signIn(t, signe)
 
-		patches := a.patches(t, a.post(t, cookie, "/comments", url.Values{"post": {post.ID.String()}, "body": {"Yes."}}, true))
-		is.Equal(t, "Your comment was added.", announced(t, patches))
+		var said []string
+		for range 2 {
+			patches := a.patches(t, a.post(t, cookie, "/comments", url.Values{"post": {post.ID.String()}, "body": {"Yes."}}, true))
+			is.Equal(t, "Your comment was added.", announced(t, patches))
 
-		patches = a.patches(t, a.post(t, cookie, "/comments/open", url.Values{"post": {post.ID.String()}}, true))
+			// The words are in an element named after the comment, so that the next comment's are said too.
+			comments := all(patches[0], hasAttr("data-comment"))
+			newest := attr(comments[len(comments)-1], "data-comment")
+			is.Equal(t, 1, len(all(patches[0], id("announcement-"+newest))))
+			said = append(said, newest)
+		}
+		is.True(t, said[0] != said[1])
+
+		patches := a.patches(t, a.post(t, cookie, "/comments/open", url.Values{"post": {post.ID.String()}}, true))
 		is.Equal(t, 0, len(all(patches[0], id("announcement"))))
 	})
 
@@ -1733,6 +1785,29 @@ func TestTimeline_traces(t *testing.T) {
 }
 
 func TestInjectHTTPRouter(t *testing.T) {
+	t.Run("panics without randomness for the tokens of forms", func(t *testing.T) {
+		defer func() {
+			is.True(t, recover() != nil, "no panic")
+		}()
+		apphttp.InjectHTTPRouter(slog.New(slog.DiscardHandler), service.NewFat(service.NewFatOptions{}), apphttp.InjectHTTPRouterOptions{Now: time.Now})(gluehttp.NewRouter(gluehttp.NewRouterOpts{SM: scs.New()}))
+	})
+
+	t.Run("gives forms tokens from the randomness it is given", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		cookie := a.signIn(t, signe)
+
+		// The app reads its tokens from ChaCha8 with a seed of zeros, so the composer's is its first 16 bytes.
+		first := make([]byte, 16)
+		_, err := rand.NewChaCha8([32]byte{}).Read(first)
+		is.NotError(t, err)
+		expected, err := model.NewFormToken(bytes.NewReader(first))
+		is.NotError(t, err)
+
+		doc := parse(t, a.get(t, cookie, "/").Body.String())
+		is.Equal(t, expected.String(), attr(one(t, one(t, doc, id("composer")), named("token")), "value"))
+	})
+
 	t.Run("shows nothing extra unless it is given something", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")

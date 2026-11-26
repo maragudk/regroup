@@ -20,8 +20,8 @@ type InjectHTTPRouterOptions struct {
 	// Now is the clock.
 	Now func() time.Time
 
-	// Random is the randomness that forms get their tokens from, such as [crypto/rand.Reader]. Reading
-	// from it must not fail.
+	// Random is the randomness that forms get their tokens from, such as [crypto/rand.Reader]. It must be
+	// given, or [InjectHTTPRouter] panics, and a page that cannot read from it panics too.
 	Random io.Reader
 
 	// Extra, if not nil, returns something for the group page to show beside the name of the person

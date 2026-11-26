@@ -16,7 +16,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	gluehttp "maragu.dev/glue/http"
 	. "maragu.dev/gomponents"
 	. "maragu.dev/gomponents/html"
@@ -116,6 +115,10 @@ func TestFavicon(t *testing.T) {
 
 		img, err := png.Decode(bytes.NewReader(ico[offset:]))
 		is.NotError(t, err)
+
+		// The bits per pixel in the header are those of the image: 24 for a PNG of red, green, and blue.
+		is.Equal(t, 24, int(binary.LittleEndian.Uint16(ico[12:14])))
+		is.Equal(t, byte(2), ico[offset+25], "the colour type of the PNG")
 		bounds := img.Bounds()
 		is.Equal(t, bounds.Dx(), bounds.Dy())
 		is.Equal(t, int(ico[6]), bounds.Dx())
@@ -127,9 +130,9 @@ func TestFavicon(t *testing.T) {
 		}
 	})
 
-	t.Run("both are served from the app's own public files, at the root", func(t *testing.T) {
+	t.Run("both are served from the app's own public files, at the root, by the static files of every glue app", func(t *testing.T) {
 		t.Chdir("..")
-		mux := chi.NewMux()
+		mux := gluehttp.NewRouter(gluehttp.NewRouterOpts{}).Mux
 		gluehttp.Static(mux)
 
 		for _, path := range []string{"/favicon.svg", "/favicon.ico"} {

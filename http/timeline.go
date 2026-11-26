@@ -36,6 +36,10 @@ type timelineService interface {
 //   - POST /comments/open gets the comments of a post, and records that the person opened them.
 //   - POST /comments creates a comment on a post.
 //
+// Each form that makes a post or a comment carries a token of its own, and every form shown gets a new
+// one. A form sent again with the same token makes nothing, and is answered as the first time. A form
+// without a token, or with one that is not one, is answered with 400.
+//
 // All but the first answer Datastar with patches to the page the request came from, and none of them
 // counts as a look. Reading goes by POST too, with the post or the cursor in the body, so that what
 // someone read is not in a URL.

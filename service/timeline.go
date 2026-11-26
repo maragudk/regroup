@@ -225,8 +225,8 @@ func GetTimeline(f *Fat, db timelineGetter, now func() time.Time, group model.Gr
 // Each post is marked with what is new to the acting user, and to nobody else. Getting the first page is a
 // look at the timeline: its marks are computed against the user's previous look, and then this look is
 // recorded. A page after the first is marked against the look before the user's latest look, so it keeps the
-// marks of the first page before it only until the user looks again, such as by opening the timeline in
-// another tab. See [model.TimelinePost] for the marks.
+// marks of the first page before it only until the user looks again. See [model.TimelinePost] for the
+// marks.
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
 func (f *Fat) GetTimeline(ctx context.Context, actor model.UserID, cursor string, limit int) (model.Timeline, error) {

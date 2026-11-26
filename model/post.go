@@ -51,7 +51,10 @@ const (
 //   - It must be valid UTF-8, or [ErrorBodyInvalid].
 //   - Line breaks are kept, and "\r\n" and a lone "\r" become "\n".
 //   - Whitespace at the start and the end is trimmed.
-//   - What is left must hold at least one visible character, or [ErrorBodyEmpty]. See [visible].
+//   - What is left must hold at least one visible character, or [ErrorBodyEmpty]. White space,
+//     default-ignorable code points such as a zero-width space or a Hangul filler, format characters
+//     that are not drawn, and the few characters drawn blank, such as the Braille pattern blank, are not
+//     visible.
 //   - It must contain no control characters other than line breaks and tabs, or [ErrorBodyInvalid].
 //   - It must be at most [PostBodyMaxLength] characters (runes), or [ErrorBodyTooLong].
 func CleanPostBody(body string) (string, error) {
@@ -98,10 +101,12 @@ func cleanBody(body string, maxLength int) (string, error) {
 //     and the code points Unicode keeps for more of these.
 //   - Other format characters (Unicode category Cf), except the prepended concatenation marks, such as the
 //     Arabic number sign, which are drawn.
-//   - The Braille pattern blank, which is drawn as nothing though Unicode does not class it as ignorable.
+//   - The few characters that fonts draw as nothing though Unicode does not class them as ignorable: the
+//     Braille pattern blank, the musical null notehead, the Egyptian hieroglyph full and half blanks, and
+//     the Khitan small script filler.
 //
-// Everything else is visible, including a combining mark on its own, a character for private use, and a
-// control character, which [cleanBody] refuses for another reason.
+// Everything else is visible, including a combining mark on its own, a character for private use, an
+// unassigned code point, and a control character.
 func visible(r rune) bool {
 	switch {
 	case unicode.In(r, unicode.White_Space, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point):
@@ -109,6 +114,6 @@ func visible(r rune) bool {
 	case unicode.Is(unicode.Cf, r):
 		return unicode.Is(unicode.Prepended_Concatenation_Mark, r)
 	default:
-		return r != 0x2800 // BRAILLE PATTERN BLANK
+		return r != 0x2800 && r != 0x1D159 && r != 0x13441 && r != 0x13442 && r != 0x16FE4
 	}
 }
