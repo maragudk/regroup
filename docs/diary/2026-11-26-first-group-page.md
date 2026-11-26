@@ -746,3 +746,48 @@ Keeping a preview that outlives the session's sub-agents without `nohup`: a Rex 
 ### Future work
 
 The lasting preview; Markus's verdict on the page and on the "new" marks; and the spec proposals that came out of the build, one at a time.
+
+## Step 10: Bombadil's first nightly run on main, and the check that was wrong
+
+**Author:** main, from the reports of a sub-agent that watched the runs and of a parallel builder that worked in its own worktree (pull request #10, merged as `0e6287a`)
+
+### Prompt Context
+
+**Verbatim prompt:** "I'd also like to use property-based testing with hegel in the Go code where it makes sense. https://hegel.dev (you have a hegel skill). Also, check out bombadil in a subagent, I've installed the CLI: https://github.com/antithesishq/bombadil . And also the usual unit and integration testing, and fuzz testing where it makes sense. Let's make this app robust."
+**Interpretation:** The nightly runs agreed in the testing plan had never run on `main`. Start them by hand once the group page is merged, and deal with what they show.
+**Inferred intent:** A nightly run that nobody has seen work is not yet a check. Its first failure also shows whether the issue it opens is enough to act on.
+
+### What I did
+
+After pull request #5 merged, I started both nightly workflows by hand on `main`. "Nightly" (`/.github/workflows/nightly.yml`) passed in about 10 minutes: the history job 9m22s, the race job 3m19s, and each of the five fuzz jobs between 4m19s and 5m23s. "Bombadil" failed on both screens with the same broken rule, `answersShowWhatWasDone`: "opening the comments of p_…: not sent after 10s", 13 minutes in on desktop and 4 minutes in on the phone, just after the action `commentWhileReopening`. Its report job opened issue #6 with the rule and the command to fetch the traces. A builder then found the check at fault and fixed it in `/bombadil/page.ts` and `/bombadil/spec.ts`. I merged that as pull request #10 after its six checks passed, and a second long run on `main`, started by hand, passed.
+
+### Why
+
+Step 7 made the page send nothing when someone opens a post's comments while a comment on that post is still on its way, or when the answer to an earlier opening arrived while the comments were closed. The checker still expected a request every time, and waited 10 seconds for one the page rightly never sends.
+
+### What worked
+
+A cut-down spec that imports the real `/bombadil/page.ts` and only opens comments and uses `commentWhileReopening` reproduced the failure in 50 seconds. The fixed checker is stricter than before: it now reports a broken `oneRequestAtATime` if the page does send a request in those two cases, and a new action, `closeWhileOpening`, explores the second case on purpose. Three planted faults were each caught by `oneRequestAtATime`: the old unguarded toggle after 1.7 seconds, a comment that can be sent twice after 0.4 seconds, and reopening after an answer that came while closed sending again and wiping the marks after 42.7 seconds. The old checker missed the third.
+
+### What didn't work
+
+- `page.route` with a delayed handler inside `playwright-cli run-code` killed the session every time, with "Session closed". Slowing responses through the browser's own network settings worked.
+- Two variants of the comment-sent-twice plant were not caught as such: turning buttons back on when any request finishes, on its own, was not caught in 3 minutes, because the toggle's guard blocks the only way to reach it; and leaving the Comment button on while a comment is on its way was caught after 5 seconds, but as an opening sent during the comment.
+
+### What I learned
+
+The false alarm was rare because a reload throws away what the checker is waiting for, and in normal exploring a navigation happens every few seconds: one failure in 215 uses of `commentWhileReopening` over 13 minutes. That is also why the 3-minute run on pull requests never hit it, though it did hit once on pull request #9 and passed on a re-run.
+
+### What was tricky
+
+Telling a fault in the app from a fault in the check. The builder settled it by hand in a browser with responses slowed to 800 ms: three comments in a row while closing and reopening each showed up with the count up by one; and open, close before the answer, open again sent one request, kept the "1 new" mark, and left every control working.
+
+### What warrants review
+
+- When the browser restores a page from its back/forward cache, the checker forgets requests still on their way, so the same kind of false alarm could come back. It has not been seen.
+- The checker repeats the page's decision about when to send. A change to the toggle in `/html/group.go` has to be made in `/bombadil/page.ts` too.
+- A small fault in the app, not fixed: if reopening already-loaded comments fails while they are closed, the next opening shows the old comments and does not try again; the one after that does.
+
+### Future work
+
+Fix the reopening quirk in the next round of fixes to the group page, and decide after some quiet nights whether bombadil becomes a merge gate.
