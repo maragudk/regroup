@@ -176,7 +176,8 @@ export type Recorder = {
   pending: Pending[];
   // Each answer whose page did not show what it should, with why.
   wrong: string[];
-  // Each request that started while another from the same form or post's comments was on its way.
+  // Each request that started while another from the same form or post's comments was on its way, and
+  // each opening of a post's comments that was sent when it should not have been.
   twice: string[];
   // Each request that failed, as Datastar tells the page.
   failed: string[];
@@ -186,6 +187,12 @@ export type Recorder = {
   failing: boolean;
   // The page was restored from the browser's back/forward cache, so what it shows may be out of date.
   restored: boolean;
+  // IDs of the details of posts whose comments got the answer to their opening while they were closed,
+  // and have not been opened since. Opening them shows that answer, and sends nothing.
+  unshown: Set<string>;
+  // Why the comments of a post were last opened with nothing to send, by the ID of their details, for
+  // the message when the page sends something anyway.
+  quiet: Map<string, string>;
 };
 
 declare global {
@@ -200,7 +207,7 @@ export function recorder(window: Window): Recorder {
   if (window.regroupBombadil) return window.regroupBombadil;
 
   const document = window.document;
-  const r: Recorder = { pending: [], wrong: [], twice: [], failed: [], violations: [], failing: false, restored: false };
+  const r: Recorder = { pending: [], wrong: [], twice: [], failed: [], violations: [], failing: false, restored: false, unshown: new Set(), quiet: new Map() };
   window.regroupBombadil = r;
 
   // The resource timings that the checks read stop at 250 by default.
@@ -278,11 +285,29 @@ export function recorder(window: Window): Recorder {
       // An opening already on its way is the only one: opening the comments again meanwhile sends
       // nothing. If it does send something, the recorder sees a second request start.
       if (r.pending.some((p) => p.element === details.id)) return;
+      // Nor is anything sent while a comment on the post is on its way, which is a request about the
+      // comments too. If something is sent, the recorder sees a request start that nothing asked for.
+      const formID = "post-" + postID + "-comment-form";
+      if (r.pending.some((p) => p.element === formID)) {
+        r.quiet.set(details.id, "while a comment on the post was on its way");
+        return;
+      }
+      // An answer that came while the comments were closed is shown now, with the marks it came with,
+      // instead of asking again, which would take them away. Its marks were compared when it came; the
+      // rest is checked again once the page has handled the opening.
+      if (r.unshown.delete(details.id)) {
+        r.quiet.set(details.id, "instead of showing the answer that came while they were closed");
+        window.setTimeout(() => {
+          for (const problem of checkOpen(document, postID, null)) r.wrong.push("opening the comments of " + postID + " again: " + problem);
+        }, 0);
+        return;
+      }
+      r.quiet.delete(details.id);
       const fresh = summary(document, postID).fresh;
       // The count of new comments is compared only if nothing else could have changed it: no other
       // opening or comment on the way, and a page that was not restored, whose count may be out of date.
       expect("opening the comments of " + postID, details.id, (p) => {
-        const commenting = r.pending.some((other) => other.element === "post-" + postID + "-comment-form");
+        const commenting = r.pending.some((other) => other.element === formID);
         return checkOpen(document, postID, p.overlapped || commenting || r.restored ? null : fresh);
       });
     },
@@ -305,9 +330,11 @@ export function recorder(window: Window): Recorder {
     switch (detail.type) {
       case "started": {
         r.failing = false;
-        if (r.pending.some((p) => p.element === element && p.started)) r.twice.push(element + " sent a request while one of its own was on its way");
+        const again = r.pending.some((p) => p.element === element && p.started);
+        if (again) r.twice.push(element + " sent a request while one of its own was on its way");
         const p = r.pending.find((p) => p.element === element && !p.started);
         if (p) p.started = true;
+        else if (!again && /^post-.+-thread$/.test(element)) r.twice.push(element + " sent a request about its comments " + (r.quiet.get(element) ?? "that no opening of them asked for"));
         break;
       }
       case "error":
@@ -324,6 +351,7 @@ export function recorder(window: Window): Recorder {
         if (i < 0) break;
         const [p] = r.pending.splice(i, 1);
         for (const problem of p!.check(p!)) r.wrong.push(p!.what + ": " + problem);
+        if (detail.el instanceof HTMLDetailsElement && !detail.el.open) r.unshown.add(element);
         break;
       }
     }
