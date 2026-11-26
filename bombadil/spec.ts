@@ -1,8 +1,8 @@
 // The product's rules for the group page, as bombadil checks, and the actions bombadil explores it with.
 // Run it with "make bombadil"; docs/research/bombadil.md says how, and how to read a failure.
 //
-// There are no roles yet. Every check holds for whoever is signed in, which "Switch person" in the
-// preview build changes, and for someone who is not signed in.
+// The checks do not tell the roles apart yet. Every check holds for whoever is signed in, which "Switch
+// person" in the preview build changes, and for someone who is not signed in.
 
 import { always } from "@antithesishq/bombadil";
 import { actions, extract, getFingerprint, registerCustomAction, weighted } from "@antithesishq/bombadil/browser";
@@ -249,7 +249,7 @@ const loadEarlier = registerCustomAction("loadEarlier", async (document) => {
 const onGroupPage = extract((state) => page.isGroupPage(state.document));
 
 const signOut = registerCustomAction("signOut", async (document, window) => {
-  page.forgetSignIn(window);
+  page.signOutSent(window);
   const form = document.createElement("form");
   form.method = "post";
   form.action = "/logout";

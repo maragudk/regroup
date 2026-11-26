@@ -1,6 +1,7 @@
 package http_test
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -41,7 +42,7 @@ func (a *app) link(t *testing.T, address string) string {
 	t.Helper()
 
 	res := a.post(t, nil, "/sign-in", url.Values{"email": {address}}, false)
-	is.Equal(t, http.StatusOK, res.Code)
+	is.Equal(t, http.StatusSeeOther, res.Code)
 	tokens := a.runJobs(t)
 	is.Equal(t, 1, len(tokens))
 	return tokens[0]
@@ -113,12 +114,12 @@ func page(t *testing.T, res *httptest.ResponseRecorder) *nethtml.Node {
 	return parse(t, res.Body.String())
 }
 
-// nonces of the content security policy, which every answer has a new one of, in a page and in a header.
-var nonces = regexp.MustCompile(`data-nonce="[^"]*"|'nonce-[^']*'`)
-
-// sameAnswer checks that the given answers are the same, status, headers, and body, but for the nonce.
+// sameAnswer checks that the given answers are the same, status, headers, and body, but for the nonce of
+// the content security policy, which every answer has a new one of, in the page and in a header.
 func sameAnswer(t *testing.T, a, b *httptest.ResponseRecorder) {
 	t.Helper()
+
+	nonces := regexp.MustCompile(`data-nonce="[^"]*"|'nonce-[^']*'`)
 
 	is.Equal(t, a.Code, b.Code)
 	is.Equal(t, nonces.ReplaceAllString(a.Body.String(), ""), nonces.ReplaceAllString(b.Body.String(), ""))
@@ -193,12 +194,18 @@ func TestPeople_signIn(t *testing.T) {
 		// The same work, too: a job for each.
 		is.EqualSlice(t, []int{1, 1, 1, 1, 1}, jobs)
 
-		is.Equal(t, http.StatusOK, answers[0].Code)
-		doc := page(t, answers[0])
+		// The answer goes on to the page that says a link is on its way, without a session that could tell
+		// the answers apart.
+		is.Equal(t, http.StatusSeeOther, answers[0].Code)
+		is.Equal(t, "/sign-in/sent", answers[0].Header().Get("Location"))
+		is.True(t, a.sessionCookie(answers[0]) == nil, "expected no session")
+		sent := a.get(t, nil, "/sign-in/sent")
+		is.Equal(t, http.StatusOK, sent.Code)
+		doc := page(t, sent)
 		is.EqualSlice(t, []string{"sent"}, messages(doc))
 		is.Equal(t, "If that address belongs to someone in the group, a link to sign in is on its way to it. It works once, for the next 15 minutes.", text(one(t, doc, hasAttr("data-message"))))
 		is.Equal(t, 0, len(all(doc, tag("form"))))
-		is.True(t, !strings.Contains(answers[0].Body.String(), "signe"), answers[0].Body.String())
+		is.True(t, !strings.Contains(sent.Body.String(), "signe"), sent.Body.String())
 	})
 
 	t.Run("sends a link to a member, and nothing to an address nobody has or a former member's", func(t *testing.T) {
@@ -208,7 +215,7 @@ func TestPeople_signIn(t *testing.T) {
 		sqlitetest.DeactivateUser(t, a.db, karen.ID)
 
 		for _, address := range []string{"signe@example.com", "nobody@example.com", "karen@example.com"} {
-			is.Equal(t, http.StatusOK, a.post(t, nil, "/sign-in", url.Values{"email": {address}}, false).Code)
+			is.Equal(t, http.StatusSeeOther, a.post(t, nil, "/sign-in", url.Values{"email": {address}}, false).Code)
 		}
 		jobstest.Run(t, a.db, jobs.Funcs(jobs.RegisterOpts{Emails: a.fat}))
 		sent := a.sender.Take()
@@ -238,7 +245,7 @@ func TestPeople_signIn(t *testing.T) {
 		a.createPost(t, signe, base.Add(-time.Hour), "Cake in the kitchen.")
 
 		res := a.send(t, nil, page(t, a.get(t, nil, "/")), "sign-in-request", url.Values{"email": {"signe@example.com"}})
-		is.Equal(t, http.StatusOK, res.Code)
+		is.Equal(t, http.StatusSeeOther, res.Code)
 		tokens := a.runJobs(t)
 		is.Equal(t, 1, len(tokens))
 
@@ -723,14 +730,15 @@ func TestPeople_members(t *testing.T) {
 		actor   func(p people) model.User
 		target  func(p people) model.UserID
 		role    string
+		code    int
 		key     string
 		message string
 	}{
-		{"an admin's own role", func(p people) model.User { return p.markus }, func(p people) model.UserID { return p.markus.ID }, "member", "own-role", "Nobody can change their own role."},
-		{"a role, by a moderator", func(p people) model.User { return p.signe }, func(p people) model.UserID { return p.thomas.ID }, "moderator", "not-allowed", "Only admins can change roles."},
-		{"a role, by a member", func(p people) model.User { return p.thomas }, func(p people) model.UserID { return p.signe.ID }, "member", "not-allowed", "Only admins can change roles."},
-		{"the role of someone not in the group", func(p people) model.User { return p.markus }, func(p people) model.UserID { return p.karen.ID }, "member", "member-not-found", "That person is not in the group."},
-		{"a role to one that is not one", func(p people) model.User { return p.markus }, func(p people) model.UserID { return p.thomas.ID }, "owner", "role-invalid", "That is not a role."},
+		{"an admin's own role", func(p people) model.User { return p.markus }, func(p people) model.UserID { return p.markus.ID }, "member", http.StatusBadRequest, "own-role", "Nobody can change their own role."},
+		{"a role, by a moderator", func(p people) model.User { return p.signe }, func(p people) model.UserID { return p.thomas.ID }, "moderator", http.StatusOK, "not-allowed", "Only admins can change roles."},
+		{"a role, by a member", func(p people) model.User { return p.thomas }, func(p people) model.UserID { return p.signe.ID }, "member", http.StatusOK, "not-allowed", "Only admins can change roles."},
+		{"the role of someone not in the group", func(p people) model.User { return p.markus }, func(p people) model.UserID { return p.karen.ID }, "member", http.StatusOK, "member-not-found", "That person is not in the group."},
+		{"a role to one that is not one", func(p people) model.User { return p.markus }, func(p people) model.UserID { return p.thomas.ID }, "owner", http.StatusBadRequest, "role-invalid", "That is not a role."},
 	} {
 		t.Run("refuses to change "+test.name+" with a plain message, and changes nothing", func(t *testing.T) {
 			a := newApp(t)
@@ -738,7 +746,7 @@ func TestPeople_members(t *testing.T) {
 			sqlitetest.DeactivateUser(t, a.db, p.karen.ID)
 
 			res := a.post(t, a.signIn(t, test.actor(p)), "/members/role", url.Values{"member": {test.target(p).String()}, "role": {test.role}}, false)
-			is.Equal(t, http.StatusOK, res.Code)
+			is.Equal(t, test.code, res.Code)
 			doc := page(t, res)
 			is.EqualSlice(t, []string{test.key}, messages(doc))
 			is.Equal(t, test.message, text(one(t, doc, hasAttr("data-message"))))
@@ -772,18 +780,113 @@ func TestPeople_members(t *testing.T) {
 	}
 }
 
-// visitor of the app, as the table of who gets what sees them.
-type visitor string
+func TestPeople_members_again(t *testing.T) {
+	t.Run("says nothing is on its way when a form sent again finds its invitation withdrawn, and logs it as sent again", func(t *testing.T) {
+		a := newApp(t)
+		p := seed(t, a)
+		cookie := a.signIn(t, p.signe)
+		doc := page(t, a.get(t, cookie, "/members"))
 
-const (
-	admin     visitor = "admin"
-	moderator visitor = "moderator"
-	member    visitor = "member"
-	inactive  visitor = "inactive"
-	nobody    visitor = "nobody"
-)
+		is.Equal(t, http.StatusSeeOther, a.send(t, cookie, doc, "invite", url.Values{"email": {"amira@example.com"}}).Code)
+		is.Equal(t, 1, len(jobstest.Take(t, a.db)))
+		is.EqualSlice(t, []string{"invited"}, messages(page(t, a.get(t, cookie, "/members"))))
+		row := one(t, page(t, a.get(t, cookie, "/members")), func(n *nethtml.Node) bool {
+			return attr(n, "data-invitation") != "" && strings.Contains(text(n), "amira@")
+		})
+		is.Equal(t, http.StatusSeeOther, a.send(t, cookie, row, "withdraw-invitation", nil).Code)
+		a.logs.Reset()
+
+		res := a.send(t, cookie, doc, "invite", url.Values{"email": {"amira@example.com"}})
+		is.Equal(t, http.StatusSeeOther, res.Code)
+		is.Equal(t, 0, len(messages(page(t, a.get(t, cookie, "/members")))))
+		is.Equal(t, 0, len(jobstest.Take(t, a.db)))
+		logs := a.logs.String()
+		is.True(t, strings.Contains(logs, "Invitation sent again from the same form"), logs)
+		is.True(t, !strings.Contains(logs, "Invited someone"), logs)
+	})
+
+	t.Run("says an invitation is on its way only on the list that comes right after it", func(t *testing.T) {
+		a := newApp(t)
+		p := seed(t, a)
+		cookie := a.signIn(t, p.markus)
+
+		is.Equal(t, http.StatusSeeOther, a.post(t, cookie, "/invitations", url.Values{"email": {"amira@example.com"}, "token": {newToken(t)}}, false).Code)
+		refused := page(t, a.post(t, cookie, "/members/role", url.Values{"member": {p.karen.ID.String()}, "role": {"owner"}}, false))
+		is.EqualSlice(t, []string{"role-invalid"}, messages(refused))
+		is.Equal(t, 0, len(messages(page(t, a.get(t, cookie, "/members")))))
+	})
+
+	for _, test := range []struct {
+		name string
+		set  func(*store)
+	}{
+		{name: "is no longer active", set: func(s *store) { s.inactive = true }},
+		{name: "is gone", set: func(s *store) { s.gone = true }},
+	} {
+		t.Run("treats a moderator who turns out to be someone who "+test.name+" in the middle of a request as not signed in", func(t *testing.T) {
+			a := newApp(t)
+			p := seed(t, a)
+			cookie := a.signIn(t, p.signe)
+
+			// The session still passes, and then the business logic finds otherwise.
+			test.set(a.store)
+
+			for _, res := range []*httptest.ResponseRecorder{
+				a.get(t, cookie, "/members"),
+				a.post(t, cookie, "/invitations", url.Values{"email": {"amira@example.com"}, "token": {newToken(t)}}, false),
+				a.post(t, cookie, "/invitations/withdraw", url.Values{"invitation": {p.invitation.ID.String()}}, false),
+			} {
+				is.Equal(t, http.StatusOK, res.Code)
+				body := res.Body.String()
+				is.Equal(t, "This group is private.", text(one(t, page(t, res), tag("h1"))))
+				for _, secret := range []string{"The Loft", "Markus", "Thomas", "@example.com"} {
+					is.True(t, !strings.Contains(body, secret), body)
+				}
+			}
+			is.Equal(t, 1, a.count(t, "invitations"))
+			is.Equal(t, 0, len(jobstest.Take(t, a.db)))
+		})
+	}
+
+	t.Run("shows a moderator who turns out to be a member in the middle of a request the list without the invitations", func(t *testing.T) {
+		a := newApp(t)
+		p := seed(t, a)
+		cookie := a.signIn(t, p.signe)
+		a.store.demoted = true
+
+		res := a.get(t, cookie, "/members")
+		is.Equal(t, http.StatusOK, res.Code)
+		doc := page(t, res)
+		is.Equal(t, 4, len(all(doc, hasAttr("data-member"))))
+		is.Equal(t, 0, len(all(doc, hasAttr("data-invitation"))))
+		is.True(t, !strings.Contains(res.Body.String(), "nadia@"), res.Body.String())
+	})
+
+	t.Run("answers a failure underneath with an error page that has nothing of the group on it", func(t *testing.T) {
+		a := newApp(t)
+		p := seed(t, a)
+		a.store.fail["ListMembers"] = errors.New("oh no")
+
+		res := a.get(t, a.signIn(t, p.signe), "/members")
+		is.Equal(t, http.StatusInternalServerError, res.Code)
+		for _, secret := range []string{"The Loft", "Markus", "@example.com"} {
+			is.True(t, !strings.Contains(res.Body.String(), secret), res.Body.String())
+		}
+		is.True(t, strings.Contains(a.logs.String(), "Error on the list of members"), a.logs.String())
+	})
+}
 
 func TestPeople_access(t *testing.T) {
+	// visitor of the app, as the table of who gets what sees them.
+	type visitor string
+	const (
+		admin     visitor = "admin"
+		moderator visitor = "moderator"
+		member    visitor = "member"
+		inactive  visitor = "inactive"
+		nobody    visitor = "nobody"
+	)
+
 	// secrets that each kind of visitor may not get from any route. Karen is made inactive, so nobody
 	// gets her name or address. Roles are as the list of members shows them.
 	everything := []string{"The Loft", "Markus", "Signe", "Thomas", "Karen", "kettle", "carrot", "@example.com", "data-role", "data-member", "Admin", "Moderator"}
@@ -817,7 +920,8 @@ func TestPeople_access(t *testing.T) {
 	}{
 		{method: http.MethodGet, path: "/", codes: all(http.StatusOK), shows: map[visitor][]string{admin: {"The Loft", "kettle"}, member: {"The Loft", "kettle"}, nobody: {"This group is private."}}},
 		{method: http.MethodGet, path: "/sign-in", codes: members(http.StatusSeeOther, http.StatusOK)},
-		{method: http.MethodPost, path: "/sign-in", form: func(people) url.Values { return url.Values{"email": {"thomas@example.com"}} }, codes: all(http.StatusOK)},
+		{method: http.MethodPost, path: "/sign-in", form: func(people) url.Values { return url.Values{"email": {"thomas@example.com"}} }, codes: all(http.StatusSeeOther)},
+		{method: http.MethodGet, path: "/sign-in/sent", codes: all(http.StatusOK)},
 		{method: http.MethodGet, path: "/sign-in/link?token=garbage", codes: all(http.StatusOK)},
 		{method: http.MethodPost, path: "/sign-in/link", form: func(people) url.Values { return url.Values{"token": {"garbage"}, "name": {"Signe"}} }, codes: all(http.StatusOK)},
 		{method: http.MethodGet, path: "/invitation?token=garbage", codes: all(http.StatusOK)},
@@ -826,7 +930,7 @@ func TestPeople_access(t *testing.T) {
 		{method: http.MethodPost, path: "/invitations", form: func(people) url.Values { return url.Values{"email": {"amira@example.com"}} }, codes: staff(http.StatusSeeOther, http.StatusOK)},
 		{method: http.MethodPost, path: "/invitations/withdraw", form: func(p people) url.Values { return url.Values{"invitation": {p.invitation.ID.String()}} }, codes: staff(http.StatusSeeOther, http.StatusOK)},
 		{method: http.MethodPost, path: "/members/role", form: func(p people) url.Values { return url.Values{"member": {p.thomas.ID.String()}, "role": {"moderator"}} },
-			codes: expected{admin: http.StatusSeeOther, moderator: http.StatusOK, member: http.StatusOK, inactive: http.StatusOK, nobody: http.StatusOK}},
+			codes: expected{admin: http.StatusSeeOther, moderator: http.StatusOK, member: http.StatusBadRequest, inactive: http.StatusOK, nobody: http.StatusOK}},
 		{method: http.MethodPost, path: "/logout", codes: all(http.StatusFound)},
 		{method: http.MethodPost, path: "/posts", form: func(people) url.Values { return url.Values{"body": {"Hello"}} }, codes: members(http.StatusSeeOther, http.StatusUnauthorized)},
 		{method: http.MethodPost, path: "/posts/earlier", form: func(people) url.Values {
@@ -1056,9 +1160,20 @@ func TestPeople_telemetry(t *testing.T) {
 		var spans int
 		for _, span := range sr.Ended() {
 			spans++
+			// What a span holds: its attributes, those of its events, such as a recorded error, and its status.
+			held := map[string]string{"status": span.Status().Description}
 			for _, attr := range span.Attributes() {
+				held[string(attr.Key)] = attr.Value.String()
+			}
+			for _, event := range span.Events() {
+				held["event "+event.Name] = event.Name
+				for _, attr := range event.Attributes {
+					held["event "+event.Name+" "+string(attr.Key)] = attr.Value.String()
+				}
+			}
+			for key, value := range held {
 				for _, secret := range append(secrets, "@", "Amira", "Zephyr", "Quill", "Varga", "zed") {
-					is.True(t, !strings.Contains(attr.Value.String(), secret), "span "+span.Name()+" holds "+secret+" in "+string(attr.Key))
+					is.True(t, !strings.Contains(value, secret), "span "+span.Name()+" holds "+secret+" in "+key)
 				}
 			}
 		}

@@ -10,8 +10,8 @@ import (
 	"app/model"
 )
 
-// Message on a page, such as why what was sent was refused. Key names it, in the page's markers, so that
-// a browser check can tell which it is. A message with no text is no message.
+// Message on a page, such as why what was sent was refused. Key names it in the page's markers. A
+// message with no text is no message.
 type Message struct {
 	Key  string
 	Text string
@@ -41,12 +41,10 @@ type PrivatePageProps struct {
 // PrivatePage says that the group is private, and has a field to ask for a link to sign in with. It names
 // neither the group nor anyone in it, and says nothing about whether an address is in the group.
 func PrivatePage(props PrivatePageProps) Node {
-	lifetime := fmt.Sprint(int(model.SignInLinkLifetime/time.Minute), " minutes")
-
 	return privateDocument(props.PageProps,
 		notice(props.Notice),
 		If(props.Sent, Group{
-			P(Data("message", "sent"), Role("status"), Text("If that address belongs to someone in the group, a link to sign in is on its way to it. It works once, for the next "+lifetime+".")),
+			P(Data("message", "sent"), Role("status"), Text("If that address belongs to someone in the group, a link to sign in is on its way to it. It works once, for the next "+model.LifetimeWords(model.SignInLinkLifetime)+".")),
 			P(Class("mt-4"), a(Href("/sign-in"), Text("Ask for another link"))),
 		}),
 		If(!props.Sent, signInRequestForm(props.Email, props.Refusal)),
@@ -86,8 +84,8 @@ func privateDocument(props PageProps, body ...Node) Node {
 }
 
 // signInRequestForm is the field to ask for a sign-in link with, holding the given address, and the given
-// refusal of it under it, if there is one. The server decides what an address is, so the browser does
-// not check it first.
+// refusal of it under it, if there is one. The browser does not check the address first, so that every
+// refusal of it is said in the same way, under the field.
 func signInRequestForm(email string, refusal Message) Node {
 	return Form(ID("sign-in-request"), Data("form", "sign-in-request"), Method("post"), Action("/sign-in"), Attr("novalidate"),
 		fieldRow(
@@ -119,8 +117,8 @@ type SignInLinkPageProps struct {
 	Refusal Message
 }
 
-// SignInLinkPage has the one button that signs in with a link. Opening the page uses nothing up, so that
-// a mail scanner that opens the link does not use it.
+// SignInLinkPage has the one button that signs in with a link, which sends the link's token, and the
+// field for a name for the first admin.
 func SignInLinkPage(props SignInLinkPageProps) Node {
 	props.Title = "Sign in to " + props.GroupName
 
@@ -164,7 +162,7 @@ type InvitationPageProps struct {
 }
 
 // InvitationPage says who invited the person, and has the field for the name the group will see and the
-// one button that joins. Opening the page uses nothing up.
+// one button that joins, which sends the invitation's token.
 func InvitationPage(props InvitationPageProps) Node {
 	props.Title = "Join " + props.GroupName
 
@@ -257,10 +255,10 @@ type InviteFormProps struct {
 	Token string
 }
 
-// MembersPage lists the members of the group, with their names and roles, in the order they joined. It has
-// only the controls the actor may use, by [model.Allowed]: admins see the addresses and can change the
-// role of everyone but themselves, and moderators and admins can invite, and see and withdraw the
-// invitations that are waiting.
+// MembersPage lists the members of the group, with their names and roles, in the order given. What the
+// actor may see and use decides the rest, by [model.Allowed]: email addresses, the control to change the
+// role of everyone but the actor, the field to invite, and the invitations that are waiting, each with
+// the button to withdraw it.
 func MembersPage(props MembersPageProps) Node {
 	props.Title = "Members of " + props.GroupName
 	actor := props.Actor
@@ -291,7 +289,7 @@ func memberRow(actor model.User, m model.Member) Node {
 			Text(roleName(m.Role)),
 			If(m.ID == actor.ID, Text(", you")),
 		),
-		If(m.Email != "", Span(Data("email", ""), Class("text-[15px]/6 wrap-anywhere text-stone-600"), Text(m.Email.String()))),
+		If(m.Email != "" && model.Allowed(&actor, model.ActionSeeEmailAddresses, nil), Span(Data("email", ""), Class("text-[15px]/6 wrap-anywhere text-stone-600"), Text(m.Email.String()))),
 		If(model.Allowed(&actor, model.ActionChangeRole, target), roleControl(m)),
 	)
 }
@@ -306,7 +304,10 @@ func roleControl(m model.Member) Node {
 		if r == m.Role {
 			continue
 		}
-		buttons = append(buttons, Button(Type("submit"), Name("role"), Value(r.String()), Class(secondaryButton+" h-11"), Text("Make "+roleWord(r))))
+		buttons = append(buttons, Button(Type("submit"), Name("role"), Value(r.String()), Class(secondaryButton+" h-11"),
+			Text("Make "+roleWord(r)),
+			Span(Class("sr-only"), Text(", "+m.Name)),
+		))
 	}
 
 	return Details(Class("group w-full sm:w-auto"),
@@ -340,7 +341,7 @@ func invitations(props MembersPageProps) Node {
 						Div(Class("min-w-0"),
 							P(Data("email", ""), Class("wrap-anywhere"), Text(inv.Email.String())),
 							P(Class("text-[15px]/6 text-stone-600"),
-								Text("Invited by "), Span(Data("inviter", ""), Class("wrap-anywhere"), Text(inv.InvitedByName)),
+								Text("Invited by "), Span(Data("inviter", ""), Class("font-serif font-[680] wrap-anywhere text-primary-700"), Text(inv.InvitedByName)),
 								Text(". Runs out "+expiry(inv.Expires.T, props.Now)+"."),
 							),
 						),
@@ -432,15 +433,18 @@ func memberSign(props signProps) Node {
 		return If(props.Here == path, Aria("current", "page"))
 	}
 
+	// link is the style of a link on the sign, and of the button that looks like one.
+	link := "underline decoration-stone-900/50 decoration-1 underline-offset-4 hover:decoration-stone-900"
+
 	return Header(Class(sign),
 		Div(Class(signInner),
 			Div(Class("flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[15px]/6"),
 				Span(Text("regroup")),
-				A(Href("/members"), current("/members"), Class(signLink), Text(members)),
+				A(Href("/members"), current("/members"), Class(link), Text(members)),
 				Div(Class("ml-auto flex min-w-0 flex-wrap items-baseline gap-x-5"),
 					Span(Data("person", ""), Class("min-w-0 font-serif text-lg/6 font-[640] wrap-anywhere"), Text(props.UserName)),
 					Form(Data("form", "sign-out"), Method("post"), Action("/logout"), Class("shrink-0"),
-						Button(Type("submit"), Class("cursor-pointer "+signLink), Text("Sign out")),
+						Button(Type("submit"), Class("cursor-pointer "+link), Text("Sign out")),
 					),
 					Iff(props.Extra != nil, func() Node {
 						return Span(Class("shrink-0 [&_a]:underline [&_a]:decoration-stone-900/50 [&_a]:decoration-1 [&_a]:underline-offset-4 [&_a]:hover:decoration-stone-900"), props.Extra)
@@ -452,10 +456,7 @@ func memberSign(props signProps) Node {
 	)
 }
 
-// signLink is a link on the sign, or a button that looks like one.
-const signLink = "underline decoration-stone-900/50 decoration-1 underline-offset-4 hover:decoration-stone-900"
-
-// headline is the style of a heading below the sign, such as a day's.
+// headline is the style of a heading of a part of a page below the sign, at the size of a day's.
 const headline = "mb-6 font-serif text-[40px]/none font-[620] tracking-[-0.015em] text-balance lg:mb-7 lg:text-[64px]/none"
 
 // primaryButton is the one orange button on a page.
@@ -471,12 +472,13 @@ func field(children ...Node) Node {
 	return Input(Class("h-[52px] w-full min-w-0 rounded-full border border-stone-500 bg-white px-[22px] text-stone-900 caret-primary-700 placeholder:text-stone-500 hover:border-stone-900 focus-visible:border-primary-700 focus-visible:-outline-offset-1"), Group(children))
 }
 
-// refusalOf a field: if there is one, the field is invalid, and described by the message with the given ID.
+// refusalOf a field: if there is one, the field is invalid, described by the message with the given ID,
+// and has the keyboard focus when the page opens, so that the refusal is said and the field is ready.
 func refusalOf(refusal Message, messageID string) Node {
 	if refusal.Text == "" {
 		return nil
 	}
-	return Group{Aria("invalid", "true"), Aria("describedby", messageID)}
+	return Group{Aria("invalid", "true"), Aria("describedby", messageID), AutoFocus()}
 }
 
 // refused says why what was typed in a field was refused, under it, with the given ID. Nothing if there
@@ -488,11 +490,11 @@ func refused(id string, refusal Message) Node {
 	return Div(Data("message", refusal.Key), message(id, refusal.Text))
 }
 
-// notice at the top of a page's body, saying something about what was sent or opened. Nothing if there
-// is no notice.
+// notice at the top of a page's body, saying why what was sent or opened was refused, as a refusal beside
+// a field says it. Nothing if there is no notice.
 func notice(n Message) Node {
 	if n.Text == "" {
 		return nil
 	}
-	return P(Data("message", n.Key), Role("alert"), Class("mb-6"), Text(n.Text))
+	return Div(Data("message", n.Key), Class("mb-6 [&>p]:mt-0"), message("notice", n.Text))
 }

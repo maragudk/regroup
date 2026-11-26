@@ -29,9 +29,18 @@ type InjectHTTPRouterOptions struct {
 	// decides.
 	TimelinePageSize int
 
-	// Extra, if not nil, returns something for the group page to show beside the name of the person
-	// who is signed in, and for the page that says the group is private to show under that.
+	// Extra, if not nil, returns something for the pages for members to show beside the name of the
+	// person who is signed in on the sign, and for the page that says the group is private to show under
+	// its field.
 	Extra func(signedIn bool) Node
+}
+
+// extra to show for someone signed in or not, from [InjectHTTPRouterOptions.Extra]: nothing if it is nil.
+func (o InjectHTTPRouterOptions) extra(signedIn bool) Node {
+	if o.Extra == nil {
+		return nil
+	}
+	return o.Extra(signedIn)
 }
 
 // InjectHTTPRouter returns what adds the app's routes to a router. No response of theirs may be stored.

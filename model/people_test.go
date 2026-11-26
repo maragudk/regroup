@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -15,6 +16,23 @@ import (
 
 	"app/model"
 )
+
+func TestLifetimeWords(t *testing.T) {
+	t.Run("says a lifetime in whole days, hours, or minutes, in the singular for one", func(t *testing.T) {
+		for d, expected := range map[time.Duration]string{
+			15 * time.Minute:   "15 minutes",
+			time.Minute:        "1 minute",
+			time.Hour:          "1 hour",
+			90 * time.Minute:   "90 minutes",
+			48 * time.Hour:     "2 days",
+			24 * time.Hour:     "1 day",
+			7 * 24 * time.Hour: "7 days",
+			36 * time.Hour:     "36 hours",
+		} {
+			is.Equal(t, expected, model.LifetimeWords(d))
+		}
+	})
+}
 
 func TestParseEmailAddress(t *testing.T) {
 	long := strings.Repeat("a", 64) + "@" + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 58) + ".dk"

@@ -201,16 +201,23 @@ func insertUser(ctx context.Context, tx *sql.Tx, into *model.User, u model.User)
 // address, if there is one, which then no longer works. Invitations that have expired by its time are
 // deleted.
 //
-// It is sent from the form with the given token. If the person it names has made an invitation from a
-// form with the same token before, CreateInvitation makes nothing: it returns the invitation that is
-// waiting for the address now, or none if none is, if the address is the one invited then, and
-// [model.ErrorFormResentChanged] if it is not.
+// It is sent from the form with the given token, and returns whether it made the invitation. If the
+// person it names has made an invitation from a form with the same token in the day before its time,
+// CreateInvitation makes nothing: it returns the invitation that is waiting for the address now, or none
+// if none is, if the address is the one invited then, and [model.ErrorFormResentChanged] if it is not.
+// The tokens of forms from before that day are deleted.
 //
 // Returns [model.ErrorAlreadyMember] if the address is an active person's, and [model.ErrorFormerMember]
 // if it is the address of a person who is no longer active.
-func (d *Database) CreateInvitation(ctx context.Context, inv model.Invitation, token model.FormToken) (model.Invitation, error) {
+func (d *Database) CreateInvitation(ctx context.Context, inv model.Invitation, token model.FormToken) (model.Invitation, bool, error) {
 	var created model.Invitation
+	var made bool
 	err := d.H.InTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		dayBefore := model.Time{T: inv.Created.T.Add(-24 * time.Hour)}
+		if err := tx.Exec(ctx, `delete from invitation_form_tokens where created <= ?`, dayBefore); err != nil {
+			return err
+		}
+
 		var sentHash string
 		err := tx.Get(ctx, &sentHash, `select email_hash from invitation_form_tokens where invited_by = ? and form_token = ?`, inv.InvitedBy, token)
 		switch {
@@ -255,6 +262,7 @@ func (d *Database) CreateInvitation(ctx context.Context, inv model.Invitation, t
 		if err := invitationByID(ctx, tx, &created, id); err != nil {
 			return err
 		}
+		made = true
 
 		body, err := json.Marshal(model.SendInvitationJobData{InvitationID: id})
 		if err != nil {
@@ -263,9 +271,9 @@ func (d *Database) CreateInvitation(ctx context.Context, inv model.Invitation, t
 		return jobs.CreateTx(ctx, tx.Tx.Tx, d.H.JobsQ, model.JobNameSendInvitation.String(), jobs.Message{Body: body})
 	})
 	if err != nil {
-		return model.Invitation{}, err
+		return model.Invitation{}, false, err
 	}
-	return created, nil
+	return created, made, nil
 }
 
 // emailHash of the given address, which must be parsed already: SHA-256, in lowercase hexadecimal.

@@ -61,16 +61,9 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		return opts.Now().In(group.TimeZone)
 	}
 
-	extra := func(signedIn bool) Node {
-		if opts.Extra == nil {
-			return nil
-		}
-		return opts.Extra(signedIn)
-	}
-
 	// private is the answer to someone who is not signed in.
 	private := func(props html.PageProps, code int) (Node, error) {
-		page := html.PrivatePage(html.PrivatePageProps{PageProps: props, Extra: extra(false)})
+		page := html.PrivatePage(html.PrivatePageProps{PageProps: props, Extra: opts.extra(false)})
 		if code == http.StatusOK {
 			return page, nil
 		}
@@ -126,7 +119,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			Composer:  html.ComposerProps{Days: firstDays(days), Token: token()},
 			Posts:     posts,
 			Earlier:   html.EarlierPostsProps{Next: timeline.Next, Days: lastDays(days), Posts: len(days) > 0},
-			Extra:     extra(true),
+			Extra:     opts.extra(true),
 		}), nil
 	})
 

@@ -131,6 +131,21 @@ const (
 	InvitationLifetime = 7 * 24 * time.Hour
 )
 
+// LifetimeWords of a link, in whole days, hours, or minutes, such as "15 minutes" or "7 days".
+func LifetimeWords(d time.Duration) string {
+	n, unit := int(d/time.Minute), "minute"
+	switch {
+	case d%(24*time.Hour) == 0:
+		n, unit = int(d/(24*time.Hour)), "day"
+	case d%time.Hour == 0:
+		n, unit = int(d/time.Hour), "hour"
+	}
+	if n != 1 {
+		unit += "s"
+	}
+	return fmt.Sprint(n, " ", unit)
+}
+
 // SignInLink that was sent to an email address. Its token is not kept, only the token's hash.
 type SignInLink struct {
 	Hash    string

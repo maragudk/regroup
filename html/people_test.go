@@ -106,6 +106,7 @@ func TestPrivatePage(t *testing.T) {
 		is.Equal(t, "Your email address", attribute(fields[0], "placeholder"))
 		is.Equal(t, "Email address", labelFor(doc, fields[0]))
 		is.Equal(t, "", attribute(fields[0], "aria-invalid"))
+		is.True(t, !hasAttribute("autofocus")(fields[0]))
 
 		buttons := elements(doc, tagged("button"))
 		is.Equal(t, 1, len(buttons))
@@ -122,6 +123,7 @@ func TestPrivatePage(t *testing.T) {
 		field := elements(doc, tagged("input"))[0]
 		is.Equal(t, "signe", attribute(field, "value"))
 		is.Equal(t, "true", attribute(field, "aria-invalid"))
+		is.True(t, hasAttribute("autofocus")(field))
 		message := elements(doc, withAttr("id", attribute(field, "aria-describedby")))
 		is.Equal(t, 1, len(message))
 		is.Equal(t, "alert", attribute(message[0], "role"))
@@ -258,13 +260,6 @@ func TestInvitationPage(t *testing.T) {
 	})
 }
 
-// members of a made-up group: an admin, a moderator, and a member, in the order they joined.
-var members = []model.Member{
-	{ID: "u_markus", Name: "Markus", Role: model.RoleAdmin, Email: "markus@example.com"},
-	{ID: "u_signe", Name: "Signe", Role: model.RoleModerator, Email: "signe@example.com"},
-	{ID: "u_thomas", Name: "Thomas", Role: model.RoleMember, Email: "thomas@example.com"},
-}
-
 // withoutEmails of the given members, as someone who may not see them gets them.
 func withoutEmails(ms []model.Member) []model.Member {
 	var out []model.Member
@@ -275,16 +270,24 @@ func withoutEmails(ms []model.Member) []model.Member {
 	return out
 }
 
-var waiting = []model.Invitation{
-	{ID: "i_1", Email: "amira@example.com", InvitedBy: "u_signe", InvitedByName: "Signe", Expires: model.Time{T: time.Date(2031, 3, 20, 10, 0, 0, 0, time.UTC)}},
-	{ID: "i_2", Email: "nadia@example.com", InvitedBy: "u_markus", InvitedByName: "Markus", Expires: model.Time{T: time.Date(2032, 1, 2, 9, 30, 0, 0, time.UTC)}},
-}
-
 func actor(id model.UserID, name string, role model.Role) model.User {
 	return model.User{ID: id, Name: name, Role: role, Active: true}
 }
 
 func TestMembersPage(t *testing.T) {
+	// members of a made-up group: an admin, a moderator, and a member, in the order they joined.
+	members := []model.Member{
+		{ID: "u_markus", Name: "Markus", Role: model.RoleAdmin, Email: "markus@example.com"},
+		{ID: "u_signe", Name: "Signe", Role: model.RoleModerator, Email: "signe@example.com"},
+		{ID: "u_thomas", Name: "Thomas", Role: model.RoleMember, Email: "thomas@example.com"},
+	}
+
+	// waiting invitations, one from this year and one from the next.
+	waiting := []model.Invitation{
+		{ID: "i_1", Email: "amira@example.com", InvitedBy: "u_signe", InvitedByName: "Signe", Expires: model.Time{T: time.Date(2031, 3, 20, 10, 0, 0, 0, time.UTC)}},
+		{ID: "i_2", Email: "nadia@example.com", InvitedBy: "u_markus", InvitedByName: "Markus", Expires: model.Time{T: time.Date(2032, 1, 2, 9, 30, 0, 0, time.UTC)}},
+	}
+
 	t.Run("lists the members with their names and roles in the order given, under the sign, with stable markers", func(t *testing.T) {
 		page := render(t, html.MembersPage(html.MembersPageProps{GroupName: "The Loft", Actor: actor("u_thomas", "Thomas", model.RoleMember), Members: withoutEmails(members), Now: now}))
 		doc := parsed(t, html.MembersPage(html.MembersPageProps{GroupName: "The Loft", Actor: actor("u_thomas", "Thomas", model.RoleMember), Members: withoutEmails(members), Now: now}))
@@ -373,7 +376,7 @@ func TestMembersPage(t *testing.T) {
 			summary := elements(row, tagged("summary"))[0]
 			is.Equal(t, "Change role of "+textOf(elements(row, hasAttribute("data-name"))[0]), textOf(summary))
 		}
-		is.EqualSlice(t, []string{"Make admin", "Make member", "Make admin", "Make moderator"}, texts(elements(elements(doc, withAttr("id", "members"))[0], tagged("button"))))
+		is.EqualSlice(t, []string{"Make admin, Signe", "Make member, Signe", "Make admin, Thomas", "Make moderator, Thomas"}, texts(elements(elements(doc, withAttr("id", "members"))[0], tagged("button"))))
 	})
 
 	t.Run("keeps what was typed to invite after a refusal, says why under the field, and says when an invitation is on its way", func(t *testing.T) {
@@ -383,6 +386,8 @@ func TestMembersPage(t *testing.T) {
 		field := elements(doc, withAttr("id", "invite-email"))[0]
 		is.Equal(t, "signe@example.com", attribute(field, "value"))
 		is.Equal(t, "true", attribute(field, "aria-invalid"))
+		is.True(t, hasAttribute("autofocus")(field))
+		is.Equal(t, 1, len(elements(doc, hasAttribute("autofocus"))))
 		is.Equal(t, "In already.", textOf(elements(doc, withAttr("id", attribute(field, "aria-describedby")))[0]))
 		is.Equal(t, 1, len(elements(doc, withAttr("data-message", "already-member"))))
 
@@ -399,16 +404,20 @@ func TestMembersPage(t *testing.T) {
 
 		notice := elements(doc, withAttr("data-message", "own-role"))
 		is.Equal(t, 1, len(notice))
-		is.Equal(t, "alert", attribute(notice[0], "role"))
+		is.Equal(t, 1, len(elements(notice[0], withAttr("role", "alert"))))
 		is.Equal(t, "Nobody can change their own role.", textOf(notice[0]))
+		// The refusal is an icon and a sentence, not a colour.
+		is.Equal(t, 1, len(elements(notice[0], tagged("svg"))))
 	})
 
 	t.Run("shows someone no longer active no control at all", func(t *testing.T) {
 		inactive := actor("u_markus", "Markus", model.RoleAdmin)
 		inactive.Active = false
+		page := render(t, html.MembersPage(html.MembersPageProps{GroupName: "The Loft", Actor: inactive, Members: members, Invitations: waiting, Now: now}))
 		doc := parsed(t, html.MembersPage(html.MembersPageProps{GroupName: "The Loft", Actor: inactive, Members: members, Invitations: waiting, Now: now}))
 
 		is.EqualSlice(t, []string{"/logout"}, attributes(elements(doc, tagged("form")), "action"))
+		is.True(t, !strings.Contains(page, "@"), page)
 	})
 }
 

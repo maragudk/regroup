@@ -7,7 +7,8 @@
 // links' expiry. [Run] draws one with hegel and runs it against a [Driver], which is one level of the app,
 // such as the business logic. After every action it checks what the driver did against the model.
 //
-// The model is plain slices, written from the rules in docs/todo/people.md, not from the code:
+// The model is plain slices, written from the rules in docs/todo/people.md as of commit 422d79e, not from
+// the code:
 //
 //   - Every person has exactly one role: admin, moderator, or member. The first admin is the address the
 //     configuration names. While the group has nobody in it, that address can get a sign-in link, and

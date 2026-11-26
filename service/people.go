@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"time"
 
@@ -122,8 +121,8 @@ func SendSignInLink(f *Fat, db signInLinkSender, sender emailSender, now func() 
 		}
 
 		err = sender.SendTransactional(ctx, email.SendOptions{
-			Keywords:  model.Keywords{"token": token.String(), "group": group.Name, "lifetime": lifetime(model.SignInLinkLifetime)},
-			Preheader: "Your link to sign in to " + group.Name + ". It works once, for the next " + lifetime(model.SignInLinkLifetime) + ".",
+			Keywords:  model.Keywords{"token": token.String(), "group": group.Name, "lifetime": model.LifetimeWords(model.SignInLinkLifetime)},
+			Preheader: "Your link to sign in to " + group.Name + ". It works once, for the next " + model.LifetimeWords(model.SignInLinkLifetime) + ".",
 			Subject:   "Sign in to " + group.Name,
 			Template:  "sign-in",
 			To:        address,
@@ -271,7 +270,8 @@ func SignIn(f *Fat, db signer, now func() time.Time, firstAdmin model.EmailAddre
 // [Fat.CheckSignInLink], is [model.ErrorLinkInvalid], whichever the reason.
 //
 // If the link is the first admin's, they join the group as an active admin with the given name, cleaned
-// by [model.CleanName], and a name that is refused uses up nothing. Anyone else's name is as it is, and
+// by [model.CleanName], and a name that is refused uses up nothing. A link that does not work is refused
+// before the name is looked at, so a refused name means that the link works. Anyone else's name is as it is, and
 // the given name is not used.
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
@@ -292,7 +292,7 @@ func (f *Fat) SignIn(ctx context.Context, token, name string) (model.User, error
 // [model.JobNameSendInvitation] that sends it.
 type inviter interface {
 	userGetter
-	CreateInvitation(ctx context.Context, inv model.Invitation, token model.FormToken) (model.Invitation, error)
+	CreateInvitation(ctx context.Context, inv model.Invitation, token model.FormToken) (model.Invitation, bool, error)
 }
 
 // Invite wires [Fat.Invite] to the given store and clock.
@@ -319,7 +319,7 @@ func Invite(f *Fat, db inviter, now func() time.Time) {
 		}
 
 		t := now()
-		inv, err := db.CreateInvitation(ctx, model.Invitation{
+		inv, made, err := db.CreateInvitation(ctx, model.Invitation{
 			Created:   model.Time{T: t},
 			Expires:   model.Time{T: t.Add(model.InvitationLifetime)},
 			Email:     e,
@@ -329,7 +329,13 @@ func Invite(f *Fat, db inviter, now func() time.Time) {
 			return model.Invitation{}, err
 		}
 
-		trace.SpanFromContext(ctx).SetAttributes(attribute.String("invitation.id", inv.ID.String()))
+		if inv.ID != "" {
+			trace.SpanFromContext(ctx).SetAttributes(attribute.String("invitation.id", inv.ID.String()))
+		}
+		if !made {
+			f.log.InfoContext(ctx, "Invitation sent again from the same form", "invitationID", inv.ID, "invitedBy", actor)
+			return inv, nil
+		}
 		f.log.InfoContext(ctx, "Invited someone", "invitationID", inv.ID, "invitedBy", actor)
 		return inv, nil
 	}
@@ -347,8 +353,8 @@ func Invite(f *Fat, db inviter, now func() time.Time) {
 //
 // It is sent from the form with the given token, which is what [model.NewFormToken] made, or
 // [model.ErrorFormTokenInvalid]. If the actor has made an invitation from a form with the same token
-// before, Invite makes nothing and sends nothing: it returns the invitation that is waiting for the
-// address now, or none if none is, if the address is the one invited then, and
+// in the day before, Invite makes nothing and sends nothing: it returns the invitation that is waiting for
+// the address now, or one with no ID if none is, if the address is the one invited then, and
 // [model.ErrorFormResentChanged] if it is not.
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
@@ -399,8 +405,8 @@ func SendInvitation(f *Fat, db invitationSender, sender emailSender, now func() 
 		}
 
 		err = sender.SendTransactional(ctx, email.SendOptions{
-			Keywords:  model.Keywords{"token": token.String(), "group": group.Name, "inviter": inv.InvitedByName, "lifetime": lifetime(model.InvitationLifetime)},
-			Preheader: inv.InvitedByName + " has invited you to join " + group.Name + ". The link works for " + lifetime(model.InvitationLifetime) + ".",
+			Keywords:  model.Keywords{"token": token.String(), "group": group.Name, "inviter": inv.InvitedByName, "lifetime": model.LifetimeWords(model.InvitationLifetime)},
+			Preheader: inv.InvitedByName + " has invited you to join " + group.Name + ". The link works for " + model.LifetimeWords(model.InvitationLifetime) + ".",
 			Subject:   inv.InvitedByName + " invited you to " + group.Name,
 			Template:  "invitation",
 			To:        inv.Email,
@@ -619,7 +625,8 @@ func AcceptInvitation(f *Fat, db invitationAccepter, now func() time.Time) {
 // posted or commented before is new to them.
 //
 // An invitation that does not work, by the rules of [Fat.CheckInvitation], is [model.ErrorLinkInvalid].
-// A name that is refused uses up nothing.
+// It is refused before the name is looked at, so a refused name means that the invitation works. A name
+// that is refused uses up nothing.
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
 func (f *Fat) AcceptInvitation(ctx context.Context, token, name string) (model.User, error) {
@@ -761,19 +768,4 @@ func (f *Fat) ChangeRole(ctx context.Context, actor, target model.UserID, role s
 	err := f.changeRole(ctx, actor, target, role)
 	recordError(span, err)
 	return err
-}
-
-// lifetime of a link in words, in whole days, hours, or minutes, such as "15 minutes" or "7 days".
-func lifetime(d time.Duration) string {
-	n, unit := int(d/time.Minute), "minute"
-	switch {
-	case d%(24*time.Hour) == 0:
-		n, unit = int(d/(24*time.Hour)), "day"
-	case d%time.Hour == 0:
-		n, unit = int(d/time.Hour), "hour"
-	}
-	if n != 1 {
-		unit += "s"
-	}
-	return fmt.Sprint(n, " ", unit)
 }

@@ -2908,13 +2908,14 @@ func (l *logs) Reset() {
 }
 
 // store is the real database, which a test can make fail for the business logic: with the given error
-// from the operation of the given name, or by having everyone turn out inactive or gone when the
-// business logic looks them up.
+// from the operation of the given name, or by having everyone turn out inactive, gone, or a member when
+// the business logic looks them up.
 type store struct {
 	*sqlite.Database
 	fail     map[string]error
 	inactive bool
 	gone     bool
+	demoted  bool
 }
 
 func (s *store) GetUser(ctx context.Context, id model.UserID) (model.User, error) {
@@ -2925,7 +2926,17 @@ func (s *store) GetUser(ctx context.Context, id model.UserID) (model.User, error
 	if s.inactive {
 		u.Active = false
 	}
+	if s.demoted {
+		u.Role = model.RoleMember
+	}
 	return u, err
+}
+
+func (s *store) ListMembers(ctx context.Context) ([]model.User, error) {
+	if err := s.fail["ListMembers"]; err != nil {
+		return nil, err
+	}
+	return s.Database.ListMembers(ctx)
 }
 
 func (s *store) CountActiveUsers(ctx context.Context) (int, error) {
@@ -3021,13 +3032,13 @@ func (a *app) route(group model.Group, extra func(signedIn bool) Node, pageSize 
 	service.SendSignInLink(fat, a.db, a.sender, a.clock.Now, random, group, a.firstAdmin)
 	service.CheckSignInLink(fat, a.db, a.clock.Now, a.firstAdmin)
 	service.SignIn(fat, a.db, a.clock.Now, a.firstAdmin)
-	service.Invite(fat, a.db, a.clock.Now)
+	service.Invite(fat, a.store, a.clock.Now)
 	service.SendInvitation(fat, a.db, a.sender, a.clock.Now, random, group)
 	service.CheckInvitation(fat, a.db, a.clock.Now)
 	service.AcceptInvitation(fat, a.db, a.clock.Now)
-	service.ListMembers(fat, a.db)
-	service.GetInvitations(fat, a.db, a.clock.Now)
-	service.WithdrawInvitation(fat, a.db, a.clock.Now)
+	service.ListMembers(fat, a.store)
+	service.GetInvitations(fat, a.store, a.clock.Now)
+	service.WithdrawInvitation(fat, a.store, a.clock.Now)
 	service.ChangeRole(fat, a.db)
 	a.fat = fat
 

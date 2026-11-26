@@ -10,6 +10,7 @@ import (
 	"github.com/alexedwards/scs/v2"
 	gluehttp "maragu.dev/glue/http"
 	. "maragu.dev/gomponents"
+	"maragu.dev/httph"
 
 	"app/html"
 	"app/model"
@@ -35,8 +36,9 @@ type peopleService interface {
 //
 //   - GET /sign-in is the page that says the group is private, with the field to ask for a sign-in link,
 //     as GET / is for someone who is not signed in. Someone who is signed in goes to the group page.
-//   - POST /sign-in with an email address asks for a sign-in link. Every address that is one gets the
-//     same page.
+//   - POST /sign-in with an email address asks for a sign-in link, and goes to GET /sign-in/sent, which says
+//     that a link is on its way if the address belongs to someone in the group. Every address that is one
+//     gets the same answer.
 //   - GET /sign-in/link?token=… is the page with the button that signs in with the link, without using it
 //     up, and POST /sign-in/link with the token, and a name for the first admin, signs in and goes to the
 //     group page.
@@ -47,24 +49,26 @@ type peopleService interface {
 //   - POST /invitations invites an email address, POST /invitations/withdraw withdraws an invitation, and
 //     POST /members/role changes someone's role. Each goes back to the list of members when it is done.
 //
-// A page that a person can come to by a link or a form the app gave them answers 200, also when it says
-// that a link does not work, or that what was sent was refused, since that is the page they are meant
-// to see. A request that no page sends is answered with 400. Someone who is not signed in, or not
-// active, gets the page that says the group is private from the pages for members.
+// Every answer that a page of the app can lead to is a page with 200, also when it says that a link does
+// not work, or why what was sent was refused, since that is the page the person is meant to see. That
+// includes a form sent again by going back after signing out or becoming someone else, which can come
+// from someone who is not signed in, or who may no longer do what the form does. A request that no page
+// sends, such as a form token that is not one, a role that is not one, or a change of one's own role, is
+// answered with 400. Someone who is not signed in, or not active, gets the page that says the group is
+// private from the pages for members.
 func people(r *Router, log *slog.Logger, svc peopleService, opts InjectHTTPRouterOptions, token func() string) {
 	group := opts.Group
 
-	extra := func(signedIn bool) Node {
-		if opts.Extra == nil {
-			return nil
-		}
-		return opts.Extra(signedIn)
-	}
+	// invited in the session says that the person has just invited someone, for the list of members to
+	// say so once.
+	const invited = "invited"
+
+	emailInvalid := html.Message{Key: "email-invalid", Text: "That is not an email address."}
 
 	// private is the page that says the group is private, with the field to ask for a sign-in link.
 	private := func(props html.PageProps, p html.PrivatePageProps) (Node, error) {
 		p.PageProps = props
-		p.Extra = extra(false)
+		p.Extra = opts.extra(false)
 		return html.PrivatePage(p), nil
 	}
 
@@ -100,6 +104,13 @@ func people(r *Router, log *slog.Logger, svc peopleService, opts InjectHTTPRoute
 			log.ErrorContext(props.Ctx, "Error asking for a sign-in link", "error", err)
 			return html.ErrorPage(props), err
 		}
+
+		// Going on to another page, so that going back or reloading does not ask again.
+		http.Redirect(props.W, props.R, "/sign-in/sent", http.StatusSeeOther)
+		return nil, nil
+	})
+
+	r.Get("/sign-in/sent", func(props html.PageProps) (Node, error) {
 		return private(props, html.PrivatePageProps{Sent: true})
 	})
 
@@ -125,7 +136,8 @@ func people(r *Router, log *slog.Logger, svc peopleService, opts InjectHTTPRoute
 
 		u, err := svc.SignIn(props.Ctx, linkToken, name)
 		if refusal := nameRefusal(err); refusal.Text != "" {
-			// The link was checked before the name, so it works, and the page may name the group.
+			// The name is refused only for a link that works, by [service.Fat.SignIn], so the page may name
+			// the group.
 			return html.SignInLinkPage(html.SignInLinkPageProps{PageProps: props, GroupName: group.Name, Token: echo(linkToken), Joining: true, Name: echo(name), Refusal: refusal}), nil
 		}
 		if errors.Is(err, model.ErrorLinkInvalid) {
@@ -156,8 +168,8 @@ func people(r *Router, log *slog.Logger, svc peopleService, opts InjectHTTPRoute
 
 		u, err := svc.AcceptInvitation(props.Ctx, linkToken, name)
 		if refusal := nameRefusal(err); refusal.Text != "" {
-			// A refused name uses up nothing, and the invitation was checked before the name. It is checked
-			// again for who sent it, and may have stopped working since.
+			// The name is refused only for an invitation that works, by [service.Fat.AcceptInvitation], and
+			// using up nothing. It is checked again for who sent it, and may have stopped working since.
 			check, err := svc.CheckInvitation(props.Ctx, linkToken)
 			switch {
 			case errors.Is(err, model.ErrorLinkInvalid):
@@ -183,10 +195,18 @@ func people(r *Router, log *slog.Logger, svc peopleService, opts InjectHTTPRoute
 			return membersFailed(props, log, err, private)
 		}
 
+		// That someone was invited is said on the list that comes next, if it is asked for, and forgotten
+		// by any other answer.
+		if r.SM.PopString(props.Ctx, invited) != "" && invite.Notice.Text == "" && notice.Text == "" && props.R.Method == http.MethodGet {
+			invite.Notice = html.Message{Key: "invited", Text: "The invitation is on its way."}
+		}
+
+		// The person may have stopped being allowed to see the invitations since the request began, and
+		// then sees none.
 		var invitations []model.Invitation
 		if model.Allowed(user, model.ActionSeeInvitations, nil) {
 			invitations, err = svc.GetInvitations(props.Ctx, user.ID)
-			if err != nil {
+			if err != nil && !errors.Is(err, model.ErrorNotAllowed) {
 				return membersFailed(props, log, err, private)
 			}
 			for i := range invitations {
@@ -204,7 +224,7 @@ func people(r *Router, log *slog.Logger, svc peopleService, opts InjectHTTPRoute
 			Now:         opts.Now().In(group.TimeZone),
 			Invite:      invite,
 			Notice:      notice,
-			Extra:       extra(true),
+			Extra:       opts.extra(true),
 		}), nil
 	}
 
@@ -214,11 +234,7 @@ func people(r *Router, log *slog.Logger, svc peopleService, opts InjectHTTPRoute
 			return private(props, html.PrivatePageProps{})
 		}
 
-		var invite html.InviteFormProps
-		if r.SM.PopString(props.Ctx, invitedKey) != "" {
-			invite.Notice = html.Message{Key: "invited", Text: "The invitation is on its way."}
-		}
-		return members(props, user, invite, html.Message{})
+		return members(props, user, html.InviteFormProps{}, html.Message{})
 	})
 
 	r.Post("/invitations", func(props html.PageProps) (Node, error) {
@@ -232,11 +248,14 @@ func people(r *Router, log *slog.Logger, svc peopleService, opts InjectHTTPRoute
 		}
 		email := props.R.PostFormValue("email")
 
-		_, err := svc.Invite(props.Ctx, user.ID, props.R.PostFormValue("token"), email)
+		inv, err := svc.Invite(props.Ctx, user.ID, props.R.PostFormValue("token"), email)
 		var refusal html.Message
 		switch {
 		case err == nil:
-			r.SM.Put(props.Ctx, invitedKey, "1")
+			// A form sent again made nothing, and an invitation from it may no longer be waiting.
+			if inv.ID != "" {
+				r.SM.Put(props.Ctx, invited, "1")
+			}
 			http.Redirect(props.W, props.R, "/members", http.StatusSeeOther)
 			return nil, nil
 		case errors.Is(err, model.ErrorFormTokenInvalid):
@@ -294,31 +313,29 @@ func people(r *Router, log *slog.Logger, svc peopleService, opts InjectHTTPRoute
 
 		err := svc.ChangeRole(props.Ctx, user.ID, target, props.R.PostFormValue("role"))
 		var notice html.Message
+		code := http.StatusOK
 		switch {
 		case err == nil:
 			http.Redirect(props.W, props.R, "/members", http.StatusSeeOther)
 			return nil, nil
 		case errors.Is(err, model.ErrorNotAllowed) && target == user.ID:
-			notice = html.Message{Key: "own-role", Text: "Nobody can change their own role."}
+			notice, code = html.Message{Key: "own-role", Text: "Nobody can change their own role."}, http.StatusBadRequest
 		case errors.Is(err, model.ErrorNotAllowed):
 			notice = html.Message{Key: "not-allowed", Text: "Only admins can change roles."}
 		case errors.Is(err, model.ErrorMemberNotFound):
 			notice = html.Message{Key: "member-not-found", Text: "That person is not in the group."}
 		case errors.Is(err, model.ErrorRoleInvalid):
-			notice = html.Message{Key: "role-invalid", Text: "That is not a role."}
+			notice, code = html.Message{Key: "role-invalid", Text: "That is not a role."}, http.StatusBadRequest
 		default:
 			return membersFailed(props, log, err, private)
 		}
-		return members(props, user, html.InviteFormProps{}, notice)
+		page, err := members(props, user, html.InviteFormProps{}, notice)
+		if err == nil && code != http.StatusOK {
+			return page, httph.HTTPError{Code: code}
+		}
+		return page, err
 	})
 }
-
-// invitedKey in the session says that the person has just invited someone, for the list of members to
-// say so once.
-const invitedKey = "invited"
-
-// emailInvalid is the refusal of text that is not an email address.
-var emailInvalid = html.Message{Key: "email-invalid", Text: "That is not an email address."}
 
 // nameRefusal in plain words, for a name that was refused. It is empty if the error is not a refusal of
 // the name, or is nil.
