@@ -29,8 +29,8 @@ type Fat struct {
 	log    *slog.Logger
 	tracer trace.Tracer
 
-	createComment func(ctx context.Context, actor model.UserID, postID model.PostID, body string) (model.Comment, error)
-	createPost    func(ctx context.Context, actor model.UserID, body string) (model.Post, error)
+	createComment func(ctx context.Context, actor model.UserID, postID model.PostID, token, body string) (model.Comment, error)
+	createPost    func(ctx context.Context, actor model.UserID, token, body string) (model.Post, error)
 	getComments   func(ctx context.Context, actor model.UserID, postID model.PostID) ([]model.TimelineComment, error)
 	getMembers    func(ctx context.Context, actor model.UserID) (int, error)
 	getTimeline   func(ctx context.Context, actor model.UserID, cursor string, limit int) (model.Timeline, error)

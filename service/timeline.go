@@ -15,7 +15,8 @@ import (
 // postCreator is the store a post is created in.
 type postCreator interface {
 	GetUser(ctx context.Context, id model.UserID) (model.User, error)
-	CreatePost(ctx context.Context, p model.Post) (model.Post, error)
+	GetPostByFormToken(ctx context.Context, author model.UserID, token model.FormToken) (model.Post, error)
+	CreatePost(ctx context.Context, p model.Post, token model.FormToken) (model.Post, error)
 }
 
 // CreatePost wires [Fat.CreatePost] to the given store and clock.
@@ -26,17 +27,33 @@ func CreatePost(f *Fat, db postCreator, now func() time.Time) {
 		panic("service: CreatePost already wired")
 	}
 
-	f.createPost = func(ctx context.Context, actor model.UserID, body string) (model.Post, error) {
+	f.createPost = func(ctx context.Context, actor model.UserID, token, body string) (model.Post, error) {
 		if err := checkActive(ctx, db, actor); err != nil {
 			return model.Post{}, err
 		}
 
-		body, err := model.CleanPostBody(body)
+		formToken, err := model.ParseFormToken(token)
 		if err != nil {
 			return model.Post{}, err
 		}
 
-		p, err := db.CreatePost(ctx, model.Post{Created: model.Time{T: now()}, AuthorID: actor, Body: body})
+		// What was sent with a token before has been decided, whatever is sent with it now.
+		p, err := db.GetPostByFormToken(ctx, actor, formToken)
+		if err == nil {
+			trace.SpanFromContext(ctx).SetAttributes(attribute.String("post.id", p.ID.String()))
+			f.log.InfoContext(ctx, "Post sent again from the same form", "postID", p.ID, "authorID", actor)
+			return p, nil
+		}
+		if !errors.Is(err, model.ErrorPostNotFound) {
+			return model.Post{}, err
+		}
+
+		body, err = model.CleanPostBody(body)
+		if err != nil {
+			return model.Post{}, err
+		}
+
+		p, err = db.CreatePost(ctx, model.Post{Created: model.Time{T: now()}, AuthorID: actor, Body: body}, formToken)
 		if err != nil {
 			return model.Post{}, err
 		}
@@ -48,11 +65,15 @@ func CreatePost(f *Fat, db postCreator, now func() time.Time) {
 	}
 }
 
-// CreatePost by the acting user, who must be active, with the given body, cleaned by [model.CleanPostBody].
-// It is posted now, by the clock the operation was wired with.
+// CreatePost by the acting user, who must be active, sent from the form with the given token, with the
+// given body, cleaned by [model.CleanPostBody]. It is posted now, by the clock the operation was wired with.
+//
+// The token is what [model.NewFormToken] made, or [model.ErrorFormTokenInvalid]. If the user has sent a
+// post with the same token before, CreatePost returns the post made then, whatever the body is now, and
+// makes nothing.
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
-func (f *Fat) CreatePost(ctx context.Context, actor model.UserID, body string) (model.Post, error) {
+func (f *Fat) CreatePost(ctx context.Context, actor model.UserID, token, body string) (model.Post, error) {
 	if f.createPost == nil {
 		panic("service: CreatePost not wired; call service.CreatePost or service.Setup")
 	}
@@ -60,7 +81,7 @@ func (f *Fat) CreatePost(ctx context.Context, actor model.UserID, body string) (
 	ctx, span := f.tracer.Start(ctx, "service.CreatePost")
 	defer span.End()
 
-	p, err := f.createPost(ctx, actor, body)
+	p, err := f.createPost(ctx, actor, token, body)
 	recordError(span, err)
 	return p, err
 }
@@ -68,7 +89,9 @@ func (f *Fat) CreatePost(ctx context.Context, actor model.UserID, body string) (
 // commentCreator is the store a comment is created in.
 type commentCreator interface {
 	GetUser(ctx context.Context, id model.UserID) (model.User, error)
-	CreateComment(ctx context.Context, c model.Comment) (model.Comment, error)
+	GetPost(ctx context.Context, id model.PostID) (model.Post, error)
+	GetCommentByFormToken(ctx context.Context, author model.UserID, token model.FormToken) (model.Comment, error)
+	CreateComment(ctx context.Context, c model.Comment, token model.FormToken) (model.Comment, error)
 }
 
 // CreateComment wires [Fat.CreateComment] to the given store and clock.
@@ -79,34 +102,60 @@ func CreateComment(f *Fat, db commentCreator, now func() time.Time) {
 		panic("service: CreateComment already wired")
 	}
 
-	f.createComment = func(ctx context.Context, actor model.UserID, postID model.PostID, body string) (model.Comment, error) {
+	f.createComment = func(ctx context.Context, actor model.UserID, postID model.PostID, token, body string) (model.Comment, error) {
 		if err := checkActive(ctx, db, actor); err != nil {
 			return model.Comment{}, err
 		}
 
-		body, err := model.CleanCommentBody(body)
+		formToken, err := model.ParseFormToken(token)
 		if err != nil {
 			return model.Comment{}, err
 		}
 
-		c, err := db.CreateComment(ctx, model.Comment{Created: model.Time{T: now()}, PostID: postID, AuthorID: actor, Body: body})
+		// What was sent with a token before has been decided, whatever is sent with it now.
+		c, err := db.GetCommentByFormToken(ctx, actor, formToken)
+		if err == nil {
+			trace.SpanFromContext(ctx).SetAttributes(attribute.String("post.id", c.PostID.String()), attribute.String("comment.id", c.ID.String()))
+			f.log.InfoContext(ctx, "Comment sent again from the same form", "commentID", c.ID, "postID", c.PostID, "authorID", actor)
+			return c, nil
+		}
+		if !errors.Is(err, model.ErrorCommentNotFound) {
+			return model.Comment{}, err
+		}
+
+		// A comment on a post that is not there is not one, whatever its body.
+		if _, err := db.GetPost(ctx, postID); err != nil {
+			return model.Comment{}, err
+		}
+
+		body, err = model.CleanCommentBody(body)
 		if err != nil {
 			return model.Comment{}, err
 		}
 
-		trace.SpanFromContext(ctx).SetAttributes(attribute.String("post.id", postID.String()), attribute.String("comment.id", c.ID.String()))
-		f.log.InfoContext(ctx, "Created comment", "commentID", c.ID, "postID", postID, "authorID", actor)
+		c, err = db.CreateComment(ctx, model.Comment{Created: model.Time{T: now()}, PostID: postID, AuthorID: actor, Body: body}, formToken)
+		if err != nil {
+			return model.Comment{}, err
+		}
+
+		trace.SpanFromContext(ctx).SetAttributes(attribute.String("post.id", c.PostID.String()), attribute.String("comment.id", c.ID.String()))
+		f.log.InfoContext(ctx, "Created comment", "commentID", c.ID, "postID", c.PostID, "authorID", actor)
 
 		return c, nil
 	}
 }
 
-// CreateComment by the acting user, who must be active, on the given post, with the given body, cleaned by
-// [model.CleanCommentBody]. It is written now, by the clock the operation was wired with.
-// Returns [model.ErrorPostNotFound] if there is no such post.
+// CreateComment by the acting user, who must be active, on the given post, sent from the form with the
+// given token, with the given body, cleaned by [model.CleanCommentBody]. It is written now, by the clock
+// the operation was wired with. Returns [model.ErrorPostNotFound] if there is no such post, before
+// anything about the body.
+//
+// The token is what [model.NewFormToken] made, or [model.ErrorFormTokenInvalid]. If the user has sent a
+// comment with the same token before, CreateComment returns the comment made then, on the post it was
+// made on, whatever the post and the body are now, and makes nothing.
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
-func (f *Fat) CreateComment(ctx context.Context, actor model.UserID, postID model.PostID, body string) (model.Comment, error) {
+func (f *Fat) CreateComment(ctx context.Context, actor model.UserID, postID model.PostID, token, body string) (model.Comment, error) {
 	if f.createComment == nil {
 		panic("service: CreateComment not wired; call service.CreateComment or service.Setup")
 	}
@@ -114,7 +163,7 @@ func (f *Fat) CreateComment(ctx context.Context, actor model.UserID, postID mode
 	ctx, span := f.tracer.Start(ctx, "service.CreateComment")
 	defer span.End()
 
-	c, err := f.createComment(ctx, actor, postID, body)
+	c, err := f.createComment(ctx, actor, postID, token, body)
 	recordError(span, err)
 	return c, err
 }
@@ -175,7 +224,9 @@ func GetTimeline(f *Fat, db timelineGetter, now func() time.Time, group model.Gr
 //
 // Each post is marked with what is new to the acting user, and to nobody else. Getting the first page is a
 // look at the timeline: its marks are computed against the user's previous look, and then this look is
-// recorded. The pages after it keep the marks of the first page. See [model.TimelinePost] for the marks.
+// recorded. A page after the first is marked against the look before the user's latest look, so it keeps the
+// marks of the first page before it only until the user looks again, such as by opening the timeline in
+// another tab. See [model.TimelinePost] for the marks.
 //
 // Panics unless the operation was wired, by [Setup] or by the function of the same name.
 func (f *Fat) GetTimeline(ctx context.Context, actor model.UserID, cursor string, limit int) (model.Timeline, error) {

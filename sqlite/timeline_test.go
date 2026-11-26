@@ -5,6 +5,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,12 +29,96 @@ func TestDatabase_CreatePost(t *testing.T) {
 			Created:  model.Time{T: base.Add(123 * time.Millisecond)},
 			AuthorID: signe.ID,
 			Body:     "Cake in the kitchen.\n\nIt's carrot.",
-		})
+		}, "")
 		is.NotError(t, err)
 		is.True(t, strings.HasPrefix(p.ID.String(), "p_"), p.ID.String())
 		is.True(t, p.Created.T.Equal(base.Add(123*time.Millisecond)))
 		is.Equal(t, signe.ID, p.AuthorID)
 		is.Equal(t, "Cake in the kitchen.\n\nIt's carrot.", p.Body)
+	})
+
+	t.Run("returns the post the author made with a token before, and stores nothing, when the author sends that token again", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+
+		first, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: signe.ID, Body: "Cake."}, "q6urq6urq6urq6urq6urqw")
+		is.NotError(t, err)
+
+		again, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base.Add(time.Minute)}, AuthorID: signe.ID, Body: "Cake!"}, "q6urq6urq6urq6urq6urqw")
+		is.NotError(t, err)
+		is.Equal(t, first, again)
+		is.Equal(t, 1, count(t, db, "posts"))
+
+		// The next post is stored after the first, as if nothing had happened in between.
+		next, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: signe.ID, Body: "More cake."}, "")
+		is.NotError(t, err)
+		is.EqualSlice(t, []model.PostID{next.ID, first.ID}, ids(getTimeline(t, db, signe)))
+	})
+
+	t.Run("makes a post for each author who sends the same token, and for each post sent without one", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		thomas := sqlitetest.CreateUser(t, db, "Thomas")
+
+		for _, author := range []model.User{signe, thomas} {
+			_, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: author.ID, Body: "Cake."}, "q6urq6urq6urq6urq6urqw")
+			is.NotError(t, err)
+		}
+		for range 2 {
+			_, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: signe.ID, Body: "Cake."}, "")
+			is.NotError(t, err)
+		}
+		is.Equal(t, 4, count(t, db, "posts"))
+	})
+
+	t.Run("makes one post however many times the same token is sent at once", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+
+		posts := make([]model.Post, 8)
+		errs := make([]error, len(posts))
+		var wg sync.WaitGroup
+		for i := range posts {
+			wg.Go(func() {
+				posts[i], errs[i] = db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: signe.ID, Body: fmt.Sprint("Cake ", i)}, "q6urq6urq6urq6urq6urqw")
+			})
+		}
+		wg.Wait()
+
+		for i := range posts {
+			is.NotError(t, errs[i])
+			is.Equal(t, posts[0], posts[i])
+		}
+		is.Equal(t, 1, count(t, db, "posts"))
+	})
+
+	t.Run("makes exactly one post for each author and token, however often and in whatever order each is sent", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		people := []model.User{sqlitetest.CreateUser(t, db, "Signe"), sqlitetest.CreateUser(t, db, "Thomas")}
+
+		hegel.Test(t, func(ht *hegel.T) {
+			_, err := db.H.DB.ExecContext(t.Context(), "delete from posts")
+			is.NotError(ht, err)
+
+			sends := hegel.Draw(ht, hegel.Lists(submission(len(people))).MinSize(1).MaxSize(20))
+
+			first := map[submitted]model.Post{}
+			for i, s := range sends {
+				p, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: people[s.author].ID, Body: fmt.Sprint("Send ", i)}, s.token)
+				if err != nil {
+					ht.Fatalf("send %v of %+v failed: %v", i, s, err)
+				}
+				if f, ok := first[s]; ok && f != p {
+					ht.Fatalf("send %v of %+v gave %+v, not what the first send gave, %+v", i, s, p, f)
+				}
+				if _, ok := first[s]; !ok {
+					first[s] = p
+				}
+			}
+			if n := count(ht, db, "posts"); n != len(first) {
+				ht.Fatalf("%v sends of %v submissions stored %v posts", len(sends), len(first), n)
+			}
+		})
 	})
 }
 
@@ -48,7 +133,7 @@ func TestDatabase_CreateComment(t *testing.T) {
 			PostID:   p.ID,
 			AuthorID: signe.ID,
 			Body:     "Gone now.",
-		})
+		}, "")
 		is.NotError(t, err)
 		is.True(t, strings.HasPrefix(c.ID.String(), "c_"), c.ID.String())
 		is.True(t, c.Created.T.Equal(base.Add(time.Minute)))
@@ -61,8 +146,147 @@ func TestDatabase_CreateComment(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")
 
-		_, err := db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: base}, PostID: "p_nope", AuthorID: signe.ID, Body: "Hello?"})
+		_, err := db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: base}, PostID: "p_nope", AuthorID: signe.ID, Body: "Hello?"}, "")
 		is.Error(t, model.ErrorPostNotFound, err)
+	})
+
+	t.Run("returns the comment the author made with a token before, and stores nothing, when the author sends that token again, whatever the post", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		p := createPost(t, db, signe, base)
+		other := createPost(t, db, signe, base)
+
+		first, err := db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: base}, PostID: p.ID, AuthorID: signe.ID, Body: "Gone now."}, "q6urq6urq6urq6urq6urqw")
+		is.NotError(t, err)
+
+		for _, post := range []model.Post{p, other} {
+			again, err := db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: base.Add(time.Minute)}, PostID: post.ID, AuthorID: signe.ID, Body: "Gone!"}, "q6urq6urq6urq6urq6urqw")
+			is.NotError(t, err)
+			is.Equal(t, first, again)
+		}
+		is.Equal(t, 1, count(t, db, "comments"))
+	})
+
+	t.Run("makes a comment for each author who sends the same token, and for each comment sent without one", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		thomas := sqlitetest.CreateUser(t, db, "Thomas")
+		p := createPost(t, db, signe, base)
+
+		for _, author := range []model.User{signe, thomas} {
+			_, err := db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: base}, PostID: p.ID, AuthorID: author.ID, Body: "Yes."}, "q6urq6urq6urq6urq6urqw")
+			is.NotError(t, err)
+		}
+		for range 2 {
+			_, err := db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: base}, PostID: p.ID, AuthorID: signe.ID, Body: "Yes."}, "")
+			is.NotError(t, err)
+		}
+		is.Equal(t, 4, count(t, db, "comments"))
+	})
+
+	t.Run("makes exactly one comment for each author and token, however often and in whatever order each is sent", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		people := []model.User{sqlitetest.CreateUser(t, db, "Signe"), sqlitetest.CreateUser(t, db, "Thomas")}
+		p := createPost(t, db, people[0], base)
+
+		hegel.Test(t, func(ht *hegel.T) {
+			_, err := db.H.DB.ExecContext(t.Context(), "delete from comments")
+			is.NotError(ht, err)
+
+			sends := hegel.Draw(ht, hegel.Lists(submission(len(people))).MinSize(1).MaxSize(20))
+
+			first := map[submitted]model.Comment{}
+			for i, s := range sends {
+				c, err := db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: base}, PostID: p.ID, AuthorID: people[s.author].ID, Body: fmt.Sprint("Send ", i)}, s.token)
+				if err != nil {
+					ht.Fatalf("send %v of %+v failed: %v", i, s, err)
+				}
+				if f, ok := first[s]; ok && f != c {
+					ht.Fatalf("send %v of %+v gave %+v, not what the first send gave, %+v", i, s, c, f)
+				}
+				if _, ok := first[s]; !ok {
+					first[s] = c
+				}
+			}
+			if n := count(ht, db, "comments"); n != len(first) {
+				ht.Fatalf("%v sends of %v submissions stored %v comments", len(sends), len(first), n)
+			}
+		})
+	})
+}
+
+func TestDatabase_GetPost(t *testing.T) {
+	t.Run("gets a post by its ID", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		p := createPost(t, db, signe, base)
+
+		got, err := db.GetPost(t.Context(), p.ID)
+		is.NotError(t, err)
+		is.Equal(t, p, got)
+	})
+
+	t.Run("refuses a post that does not exist", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+
+		_, err := db.GetPost(t.Context(), "p_nope")
+		is.Error(t, model.ErrorPostNotFound, err)
+	})
+}
+
+func TestDatabase_GetPostByFormToken(t *testing.T) {
+	t.Run("gets the post the author made with the token, and nobody else's", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		thomas := sqlitetest.CreateUser(t, db, "Thomas")
+		p, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: signe.ID, Body: "Cake."}, "q6urq6urq6urq6urq6urqw")
+		is.NotError(t, err)
+
+		got, err := db.GetPostByFormToken(t.Context(), signe.ID, "q6urq6urq6urq6urq6urqw")
+		is.NotError(t, err)
+		is.Equal(t, p, got)
+
+		_, err = db.GetPostByFormToken(t.Context(), thomas.ID, "q6urq6urq6urq6urq6urqw")
+		is.Error(t, model.ErrorPostNotFound, err)
+
+		_, err = db.GetPostByFormToken(t.Context(), signe.ID, "AAAAAAAAAAAAAAAAAAAAAA")
+		is.Error(t, model.ErrorPostNotFound, err)
+	})
+
+	t.Run("never finds a post that was made without a token", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		createPost(t, db, signe, base)
+
+		_, err := db.GetPostByFormToken(t.Context(), signe.ID, "")
+		is.Error(t, model.ErrorPostNotFound, err)
+	})
+}
+
+func TestDatabase_GetCommentByFormToken(t *testing.T) {
+	t.Run("gets the comment the author made with the token, and nobody else's", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		thomas := sqlitetest.CreateUser(t, db, "Thomas")
+		p := createPost(t, db, signe, base)
+		c, err := db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: base}, PostID: p.ID, AuthorID: signe.ID, Body: "Yes."}, "q6urq6urq6urq6urq6urqw")
+		is.NotError(t, err)
+
+		got, err := db.GetCommentByFormToken(t.Context(), signe.ID, "q6urq6urq6urq6urq6urqw")
+		is.NotError(t, err)
+		is.Equal(t, c, got)
+
+		_, err = db.GetCommentByFormToken(t.Context(), thomas.ID, "q6urq6urq6urq6urq6urqw")
+		is.Error(t, model.ErrorCommentNotFound, err)
+	})
+
+	t.Run("never finds a comment that was made without a token", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		createComment(t, db, signe, createPost(t, db, signe, base), base)
+
+		_, err := db.GetCommentByFormToken(t.Context(), signe.ID, "")
+		is.Error(t, model.ErrorCommentNotFound, err)
 	})
 }
 
@@ -406,7 +630,7 @@ func TestDatabase_GetTimeline(t *testing.T) {
 			}
 			var stored []storedPost
 			store := func(created time.Time) storedPost {
-				p, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: created}, AuthorID: signe.ID, Body: "Hi"})
+				p, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: created}, AuthorID: signe.ID, Body: "Hi"}, "")
 				if err != nil {
 					ht.Fatal(err)
 				}
@@ -583,6 +807,7 @@ func TestTimelineMigration(t *testing.T) {
 		is.NotError(t, migrate.To(t.Context(), db.H.DB.DB, migrations, "1755714454-auth"))
 		before := sqlitetest.CreateUser(t, db, "Before")
 		is.NotError(t, migrate.To(t.Context(), db.H.DB.DB, migrations, "1795703426-timeline"))
+		is.NotError(t, migrate.Up(t.Context(), db.H.DB.DB, migrations))
 
 		thomas := sqlitetest.CreateUser(t, db, "Thomas")
 		createPost(t, db, thomas, base)
@@ -592,10 +817,59 @@ func TestTimelineMigration(t *testing.T) {
 	})
 }
 
+func TestFormTokenMigration(t *testing.T) {
+	t.Run("keeps the posts and comments from before it, and migrates down and up again", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		migrations := os.DirFS("migrations")
+		is.NotError(t, migrate.To(t.Context(), db.H.DB.DB, migrations, "1795703426-timeline"))
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		_, err := db.H.DB.ExecContext(t.Context(), `insert into sequences (name, value) values ('posts', 1) on conflict do update set value = 1`)
+		is.NotError(t, err)
+		_, err = db.H.DB.ExecContext(t.Context(), `insert into posts (id, seq, created, author_id, body) values ('p_before', 1, '2026-11-26T09:00:00.000Z', ?, 'Before')`, signe.ID)
+		is.NotError(t, err)
+
+		is.NotError(t, migrate.Up(t.Context(), db.H.DB.DB, migrations))
+		p, err := db.GetPost(t.Context(), "p_before")
+		is.NotError(t, err)
+		is.Equal(t, "Before", p.Body)
+
+		is.NotError(t, migrate.To(t.Context(), db.H.DB.DB, migrations, "1795703426-timeline"))
+		is.NotError(t, migrate.Up(t.Context(), db.H.DB.DB, migrations))
+		_, err = db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: signe.ID, Body: "After"}, "q6urq6urq6urq6urq6urqw")
+		is.NotError(t, err)
+	})
+}
+
+// submitted is what makes a submission of a form the same submission: who sends it, and its token.
+type submitted struct {
+	author int
+	token  model.FormToken
+}
+
+// submission by one of the given number of people, with one of a few tokens, so that the same one comes
+// up again often. Sometimes it has no token, which is never the same submission as another.
+func submission(people int) hegel.Generator[submitted] {
+	return hegel.Composite(func(tc hegel.TestCase) submitted {
+		return submitted{
+			author: hegel.Draw(tc, hegel.Integers(0, people-1)),
+			token:  hegel.Draw(tc, hegel.SampledFrom([]model.FormToken{"q6urq6urq6urq6urq6urqw", "AAAAAAAAAAAAAAAAAAAAAA", "-_-_-_-_-_-_-_-_-_-_-w"})),
+		}
+	})
+}
+
+// count the rows of the given table.
+func count(t testing.TB, db *sqlite.Database, table string) int {
+	t.Helper()
+
+	var n int
+	is.NotError(t, db.H.Get(t.Context(), &n, "select count(*) from "+table))
+	return n
+}
+
 func createPost(t *testing.T, db *sqlite.Database, author model.User, created time.Time) model.Post {
 	t.Helper()
 
-	p, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: created}, AuthorID: author.ID, Body: fmt.Sprint("A post by ", author.Name)})
+	p, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: created}, AuthorID: author.ID, Body: fmt.Sprint("A post by ", author.Name)}, "")
 	is.NotError(t, err)
 	return p
 }
@@ -603,7 +877,7 @@ func createPost(t *testing.T, db *sqlite.Database, author model.User, created ti
 func createComment(t *testing.T, db *sqlite.Database, author model.User, p model.Post, created time.Time) model.Comment {
 	t.Helper()
 
-	c, err := db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: created}, PostID: p.ID, AuthorID: author.ID, Body: fmt.Sprint("A comment by ", author.Name)})
+	c, err := db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: created}, PostID: p.ID, AuthorID: author.ID, Body: fmt.Sprint("A comment by ", author.Name)}, "")
 	is.NotError(t, err)
 	return c
 }

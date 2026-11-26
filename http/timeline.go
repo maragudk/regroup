@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	. "maragu.dev/gomponents"
@@ -19,8 +20,8 @@ import (
 
 // timelineService is what the timeline's routes need from the business logic.
 type timelineService interface {
-	CreateComment(ctx context.Context, actor model.UserID, postID model.PostID, body string) (model.Comment, error)
-	CreatePost(ctx context.Context, actor model.UserID, body string) (model.Post, error)
+	CreateComment(ctx context.Context, actor model.UserID, postID model.PostID, token, body string) (model.Comment, error)
+	CreatePost(ctx context.Context, actor model.UserID, token, body string) (model.Post, error)
 	GetComments(ctx context.Context, actor model.UserID, postID model.PostID) ([]model.TimelineComment, error)
 	GetMembers(ctx context.Context, actor model.UserID) (int, error)
 	GetTimeline(ctx context.Context, actor model.UserID, cursor string, limit int) (model.Timeline, error)
@@ -46,6 +47,24 @@ type timelineService interface {
 // Someone who is not signed in, or not active, gets nothing of the group from any of them.
 func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPRouterOptions) {
 	group := opts.Group
+
+	if opts.Random == nil {
+		panic("http: no randomness for form tokens in InjectHTTPRouterOptions.Random")
+	}
+
+	// token for a form that makes something. Every form shown gets a new one.
+	var randomLock sync.Mutex
+	token := func() string {
+		randomLock.Lock()
+		defer randomLock.Unlock()
+
+		t, err := model.NewFormToken(opts.Random)
+		if err != nil {
+			panic("error reading randomness for a form token: " + err.Error())
+		}
+		return t.String()
+	}
+	posts := html.PostsProps{Token: token}
 
 	now := func() time.Time {
 		return opts.Now().In(group.TimeZone)
@@ -75,6 +94,8 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			return private(props, signedOutCode)
 		case errors.Is(err, model.ErrorPostNotFound):
 			return html.NotFoundPage(props), httph.HTTPError{Code: http.StatusNotFound}
+		case errors.Is(err, model.ErrorFormTokenInvalid):
+			return badRequest(props)
 		default:
 			log.ErrorContext(props.Ctx, "Error on the timeline", "error", err)
 			return html.ErrorPage(props), err
@@ -111,7 +132,8 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			UserName:  user.Name,
 			Now:       now(),
 			Timeline:  timeline,
-			Composer:  html.ComposerProps{Days: firstDays(days)},
+			Composer:  html.ComposerProps{Days: firstDays(days), Token: token()},
+			Posts:     posts,
 			Earlier:   html.EarlierPostsProps{Next: timeline.Next, Days: lastDays(days)},
 			Extra:     extra(true),
 		}), nil
@@ -129,7 +151,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		body := props.R.PostFormValue("body")
 		days := parseDays(props.R.PostFormValue("days"))
 
-		post, err := svc.CreatePost(props.Ctx, user.ID, body)
+		post, err := svc.CreatePost(props.Ctx, user.ID, props.R.PostFormValue("token"), body)
 		if message := refusal(err, "post", model.PostBodyMaxLength); message != "" {
 			if !isDatastar(props.R) {
 				return refused(props, "That was not posted", message)
@@ -139,6 +161,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 				Message: message,
 				Days:    days,
 				Fresh:   echo(props.R.PostFormValue("field")),
+				Token:   token(),
 			})})
 		}
 		if err != nil {
@@ -157,16 +180,16 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		// its day if that is one of them.
 		if slices.Contains(days, day.Date) {
 			return nil, writePatches(props.W,
-				patch{elements: html.Composer(html.ComposerProps{Days: days, Fresh: post.ID.String()})},
-				patch{selector: "#" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts)},
+				patch{elements: html.Composer(html.ComposerProps{Days: days, Fresh: post.ID.String(), Token: token()})},
+				patch{selector: "#" + html.DayPostsID(day.Date), mode: "prepend", elements: html.TimelinePosts(day.Posts, posts)},
 			)
 		}
 
 		// Otherwise it brings its day's heading along, to the top of the timeline. If the timeline was
 		// empty, and said so, the day takes the place of that.
 		patches := []patch{
-			{elements: html.Composer(html.ComposerProps{Days: firstDays(append([]model.Date{day.Date}, days...)), Fresh: post.ID.String()})},
-			{selector: "#" + html.TimelineID, mode: "prepend", elements: html.TimelineDay(day, now)},
+			{elements: html.Composer(html.ComposerProps{Days: firstDays(append([]model.Date{day.Date}, days...)), Fresh: post.ID.String(), Token: token()})},
+			{selector: "#" + html.TimelineID, mode: "prepend", elements: html.TimelineDay(day, now, posts)},
 		}
 		if len(days) == 0 {
 			patches[1].mode = "inner"
@@ -221,7 +244,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		var days []model.TimelineDay
 		for _, day := range timeline.Days {
 			if slices.Contains(known, day.Date) {
-				patches = append(patches, patch{selector: "#" + html.DayPostsID(day.Date), mode: "append", elements: html.TimelinePosts(day.Posts)})
+				patches = append(patches, patch{selector: "#" + html.DayPostsID(day.Date), mode: "append", elements: html.TimelinePosts(day.Posts, posts)})
 				continue
 			}
 			days = append(days, day)
@@ -229,7 +252,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		}
 		if len(days) > 0 {
 			patches = append(patches, patch{selector: "#" + html.TimelineID, mode: "append", elements: Map(days, func(day model.TimelineDay) Node {
-				return html.TimelineDay(day, now)
+				return html.TimelineDay(day, now, posts)
 			})})
 		}
 		patches = append(patches, patch{elements: html.EarlierPosts(html.EarlierPostsProps{Next: timeline.Next, Days: lastDays(known)})})
@@ -286,7 +309,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 		postID := model.PostID(props.R.PostFormValue("post"))
 		body := props.R.PostFormValue("body")
 
-		comment, err := svc.CreateComment(props.Ctx, user.ID, postID, body)
+		comment, err := svc.CreateComment(props.Ctx, user.ID, postID, props.R.PostFormValue("token"), body)
 		if message := refusal(err, "comment", model.CommentBodyMaxLength); message != "" {
 			if !isDatastar(props.R) {
 				return refused(props, "That comment was not added", message)
@@ -296,6 +319,7 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 				Body:    echo(body),
 				Message: message,
 				Fresh:   echo(props.R.PostFormValue("field")),
+				Token:   token(),
 			})})
 		}
 		if err != nil {
@@ -307,7 +331,8 @@ func timeline(r *Router, log *slog.Logger, svc timelineService, opts InjectHTTPR
 			return nil, nil
 		}
 
-		return comments(props, user, postID, html.CommentForm(html.CommentFormProps{PostID: postID, Fresh: comment.ID.String()}))
+		// A comment sent again gets what it got the first time, which is on the post it was made on.
+		return comments(props, user, comment.PostID, html.CommentForm(html.CommentFormProps{PostID: comment.PostID, Fresh: comment.ID.String(), Token: token()}))
 	})
 }
 

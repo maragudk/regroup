@@ -1,6 +1,7 @@
 package preview_test
 
 import (
+	"crypto/rand"
 	"io"
 	"log/slog"
 	"net/http"
@@ -46,13 +47,13 @@ func TestRoutes(t *testing.T) {
 
 		fat := service.NewFat(service.NewFatOptions{})
 		service.Setup(fat, nil, db, nil, now, group)
-		_, err = fat.CreatePost(t.Context(), signe.ID, "Cake in the kitchen.")
+		_, err = fat.CreatePost(t.Context(), signe.ID, "q6urq6urq6urq6urq6urqw", "Cake in the kitchen.")
 		is.NotError(t, err)
 
 		sm := scs.New()
 		r := gluehttp.NewRouter(gluehttp.NewRouterOpts{SM: sm})
 		r.Use(sm.LoadAndSave, gluehttp.Authenticate(log, sm, db))
-		apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{Group: group, Now: now, Extra: preview.PeopleLink})(r)
+		apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{Group: group, Now: now, Random: rand.Reader, Extra: preview.PeopleLink})(r)
 		preview.Routes(r, log, db)
 		server := httptest.NewServer(r.Mux)
 		t.Cleanup(server.Close)

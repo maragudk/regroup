@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -36,7 +37,7 @@ func TestFat_CreatePost(t *testing.T) {
 		fat := servicetest.NewFat(t)
 		service.CreatePost(fat, db, (&clock{t: base}).Now)
 
-		p, err := fat.CreatePost(t.Context(), signe.ID, "  Cake in the kitchen.\r\nCarrot.  \n")
+		p, err := fat.CreatePost(t.Context(), signe.ID, token(t), "  Cake in the kitchen.\r\nCarrot.  \n")
 		is.NotError(t, err)
 		is.Equal(t, signe.ID, p.AuthorID)
 		is.Equal(t, "Cake in the kitchen.\nCarrot.", p.Body)
@@ -49,10 +50,10 @@ func TestFat_CreatePost(t *testing.T) {
 		fat := servicetest.NewFat(t)
 		service.CreatePost(fat, db, (&clock{t: base}).Now)
 
-		_, err := fat.CreatePost(t.Context(), signe.ID, " \n ")
+		_, err := fat.CreatePost(t.Context(), signe.ID, token(t), " \n ")
 		is.Error(t, model.ErrorBodyEmpty, err)
 
-		_, err = fat.CreatePost(t.Context(), signe.ID, strings.Repeat("a", model.PostBodyMaxLength+1))
+		_, err = fat.CreatePost(t.Context(), signe.ID, token(t), strings.Repeat("a", model.PostBodyMaxLength+1))
 		is.Error(t, model.ErrorBodyTooLong, err)
 	})
 
@@ -63,10 +64,10 @@ func TestFat_CreatePost(t *testing.T) {
 		fat := servicetest.NewFat(t)
 		service.CreatePost(fat, db, (&clock{t: base}).Now)
 
-		_, err := fat.CreatePost(t.Context(), signe.ID, "Hello")
+		_, err := fat.CreatePost(t.Context(), signe.ID, token(t), "Hello")
 		is.Error(t, model.ErrorUserInactive, err)
 
-		_, err = fat.CreatePost(t.Context(), "u_nope", "Hello")
+		_, err = fat.CreatePost(t.Context(), "u_nope", token(t), "Hello")
 		is.Error(t, model.ErrorUserNotFound, err)
 	})
 
@@ -77,12 +78,64 @@ func TestFat_CreatePost(t *testing.T) {
 		fat := service.NewFat(service.NewFatOptions{Log: slog.New(slog.NewTextHandler(&logs, nil))})
 		service.CreatePost(fat, db, (&clock{t: base}).Now)
 
-		p, err := fat.CreatePost(t.Context(), signe.ID, "A secret about the coffee machine")
+		p, err := fat.CreatePost(t.Context(), signe.ID, token(t), "A secret about the coffee machine")
 		is.NotError(t, err)
 
 		is.True(t, strings.Contains(logs.String(), p.ID.String()), logs.String())
 		is.True(t, !strings.Contains(logs.String(), "coffee"), logs.String())
 		is.True(t, !strings.Contains(logs.String(), signe.Email.String()), logs.String())
+	})
+}
+
+func TestFat_CreatePost_again(t *testing.T) {
+	t.Run("returns the post made the first time when the same token is sent again, whatever the body, and makes nothing", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		c := &clock{t: base}
+		fat := servicetest.NewFat(t)
+		service.CreatePost(fat, db, c.Now)
+		sent := token(t)
+
+		first, err := fat.CreatePost(t.Context(), signe.ID, sent, "Cake.")
+		is.NotError(t, err)
+
+		c.t = base.Add(time.Minute)
+		for _, body := range []string{"Cake.", "Cake!", " ", strings.Repeat("a", model.PostBodyMaxLength+1)} {
+			again, err := fat.CreatePost(t.Context(), signe.ID, sent, body)
+			is.NotError(t, err)
+			is.Equal(t, first, again)
+		}
+
+		posts, _, err := db.GetTimeline(t.Context(), signe.ID, nil, 10)
+		is.NotError(t, err)
+		is.Equal(t, 1, len(posts))
+	})
+
+	t.Run("makes a post for each new token", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		fat := servicetest.NewFat(t)
+		service.CreatePost(fat, db, (&clock{t: base}).Now)
+
+		p1, err := fat.CreatePost(t.Context(), signe.ID, token(t), "Cake.")
+		is.NotError(t, err)
+		p2, err := fat.CreatePost(t.Context(), signe.ID, token(t), "Cake.")
+		is.NotError(t, err)
+		is.True(t, p1.ID != p2.ID)
+	})
+
+	t.Run("refuses a token that is not one, before anything about the body", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		fat := servicetest.NewFat(t)
+		service.CreatePost(fat, db, (&clock{t: base}).Now)
+
+		for _, sent := range []string{"", "not a token", "q6urq6urq6urq6urq6urqx"} {
+			_, err := fat.CreatePost(t.Context(), signe.ID, sent, "Cake.")
+			is.Error(t, model.ErrorFormTokenInvalid, err)
+			_, err = fat.CreatePost(t.Context(), signe.ID, sent, " ")
+			is.Error(t, model.ErrorFormTokenInvalid, err)
+		}
 	})
 }
 
@@ -99,15 +152,15 @@ func TestFat_logging(t *testing.T) {
 		service.GetTimeline(fat, db, c.Now, model.Group{Name: "The Loft", TimeZone: time.UTC})
 		service.GetComments(fat, db)
 
-		p, err := fat.CreatePost(t.Context(), signe.ID, "A secret about the coffee machine")
+		p, err := fat.CreatePost(t.Context(), signe.ID, token(t), "A secret about the coffee machine")
 		is.NotError(t, err)
-		comment, err := fat.CreateComment(t.Context(), thomas.ID, p.ID, "A secret about the printer")
+		comment, err := fat.CreateComment(t.Context(), thomas.ID, p.ID, token(t), "A secret about the printer")
 		is.NotError(t, err)
 		_, err = fat.GetTimeline(t.Context(), thomas.ID, "", 0)
 		is.NotError(t, err)
 		_, err = fat.GetComments(t.Context(), signe.ID, p.ID)
 		is.NotError(t, err)
-		_, err = fat.CreatePost(t.Context(), signe.ID, " ")
+		_, err = fat.CreatePost(t.Context(), signe.ID, token(t), " ")
 		is.Error(t, model.ErrorBodyEmpty, err)
 
 		is.True(t, strings.Contains(logs.String(), comment.ID.String()), logs.String())
@@ -127,11 +180,11 @@ func TestFat_CreateComment(t *testing.T) {
 		service.CreatePost(fat, db, c.Now)
 		service.CreateComment(fat, db, c.Now)
 
-		p, err := fat.CreatePost(t.Context(), signe.ID, "Cake")
+		p, err := fat.CreatePost(t.Context(), signe.ID, token(t), "Cake")
 		is.NotError(t, err)
 
 		c.t = base.Add(time.Minute)
-		comment, err := fat.CreateComment(t.Context(), thomas.ID, p.ID, " Thanks!\n")
+		comment, err := fat.CreateComment(t.Context(), thomas.ID, p.ID, token(t), " Thanks!\n")
 		is.NotError(t, err)
 		is.Equal(t, p.ID, comment.PostID)
 		is.Equal(t, thomas.ID, comment.AuthorID)
@@ -146,33 +199,77 @@ func TestFat_CreateComment(t *testing.T) {
 		service.CreatePost(fat, db, (&clock{t: base}).Now)
 		service.CreateComment(fat, db, (&clock{t: base}).Now)
 
-		p, err := fat.CreatePost(t.Context(), signe.ID, "Cake")
+		p, err := fat.CreatePost(t.Context(), signe.ID, token(t), "Cake")
 		is.NotError(t, err)
 
-		_, err = fat.CreateComment(t.Context(), signe.ID, p.ID, strings.Repeat("a", model.CommentBodyMaxLength+1))
+		_, err = fat.CreateComment(t.Context(), signe.ID, p.ID, token(t), strings.Repeat("a", model.CommentBodyMaxLength+1))
 		is.Error(t, model.ErrorBodyTooLong, err)
 	})
 
-	t.Run("refuses a post that does not exist", func(t *testing.T) {
+	t.Run("refuses a post that does not exist, before anything about the body", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")
 		fat := servicetest.NewFat(t)
 		service.CreateComment(fat, db, (&clock{t: base}).Now)
 
-		_, err := fat.CreateComment(t.Context(), signe.ID, "p_nope", "Hello")
-		is.Error(t, model.ErrorPostNotFound, err)
+		for _, body := range []string{"Hello", "", " \n ", strings.Repeat("a", model.CommentBodyMaxLength+1), "Hello \xff"} {
+			_, err := fat.CreateComment(t.Context(), signe.ID, "p_nope", token(t), body)
+			is.Error(t, model.ErrorPostNotFound, err)
+		}
+	})
+
+	t.Run("returns the comment made the first time when the same token is sent again, whatever the post and the body, and makes nothing", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		c := &clock{t: base}
+		fat := servicetest.NewFat(t)
+		service.CreatePost(fat, db, c.Now)
+		service.CreateComment(fat, db, c.Now)
+		p := createPost(t, fat, signe, "Cake")
+		sent := token(t)
+
+		first, err := fat.CreateComment(t.Context(), signe.ID, p.ID, sent, "Gone now.")
+		is.NotError(t, err)
+
+		c.t = base.Add(time.Minute)
+		for _, again := range []struct {
+			post model.PostID
+			body string
+		}{{p.ID, "Gone now."}, {p.ID, ""}, {"p_nope", "Gone now."}} {
+			comment, err := fat.CreateComment(t.Context(), signe.ID, again.post, sent, again.body)
+			is.NotError(t, err)
+			is.Equal(t, first, comment)
+		}
+
+		comments, err := db.GetComments(t.Context(), signe.ID, p.ID)
+		is.NotError(t, err)
+		is.Equal(t, 1, len(comments))
+	})
+
+	t.Run("refuses a token that is not one", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		fat := servicetest.NewFat(t)
+		service.CreatePost(fat, db, (&clock{t: base}).Now)
+		service.CreateComment(fat, db, (&clock{t: base}).Now)
+		p := createPost(t, fat, signe, "Cake")
+
+		for _, sent := range []string{"", "not a token"} {
+			_, err := fat.CreateComment(t.Context(), signe.ID, p.ID, sent, "Yes.")
+			is.Error(t, model.ErrorFormTokenInvalid, err)
+		}
 	})
 
 	t.Run("refuses an inactive user", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")
-		p, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: signe.ID, Body: "Cake"})
+		p, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: signe.ID, Body: "Cake"}, "")
 		is.NotError(t, err)
 		sqlitetest.DeactivateUser(t, db, signe.ID)
 		fat := servicetest.NewFat(t)
 		service.CreateComment(fat, db, (&clock{t: base}).Now)
 
-		_, err = fat.CreateComment(t.Context(), signe.ID, p.ID, "Hello")
+		_, err = fat.CreateComment(t.Context(), signe.ID, p.ID, token(t), "Hello")
 		is.Error(t, model.ErrorUserInactive, err)
 	})
 }
@@ -292,7 +389,7 @@ func TestFat_GetTimeline(t *testing.T) {
 		thomas := sqlitetest.CreateUser(t, db, "Thomas")
 		fat := newTimelineFat(t, db, &clock{t: base}, group)
 		p := createPost(t, fat, thomas, "Anyone know a good accountant?")
-		_, err := fat.CreateComment(t.Context(), signe.ID, p.ID, "Karen does.")
+		_, err := fat.CreateComment(t.Context(), signe.ID, p.ID, token(t), "Karen does.")
 		is.NotError(t, err)
 
 		timeline, err := fat.GetTimeline(t.Context(), thomas.ID, "", 0)
@@ -316,10 +413,10 @@ func TestFat_GetComments(t *testing.T) {
 		fat := newTimelineFat(t, db, c, model.Group{Name: "The Loft", TimeZone: time.UTC})
 		p := createPost(t, fat, signe, "Coffee machine is sulking again")
 		c.t = base.Add(time.Minute)
-		c1, err := fat.CreateComment(t.Context(), thomas.ID, p.ID, "Have you tried descaling it?")
+		c1, err := fat.CreateComment(t.Context(), thomas.ID, p.ID, token(t), "Have you tried descaling it?")
 		is.NotError(t, err)
 		c.t = base.Add(2 * time.Minute)
-		c2, err := fat.CreateComment(t.Context(), signe.ID, p.ID, "It's the third time this week.")
+		c2, err := fat.CreateComment(t.Context(), signe.ID, p.ID, token(t), "It's the third time this week.")
 		is.NotError(t, err)
 
 		comments, err := fat.GetComments(t.Context(), signe.ID, p.ID)
@@ -348,7 +445,7 @@ func TestFat_GetComments(t *testing.T) {
 	t.Run("refuses an inactive user", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")
-		p, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: signe.ID, Body: "Cake"})
+		p, err := db.CreatePost(t.Context(), model.Post{Created: model.Time{T: base}, AuthorID: signe.ID, Body: "Cake"}, "")
 		is.NotError(t, err)
 		sqlitetest.DeactivateUser(t, db, signe.ID)
 		fat := servicetest.NewFat(t)
@@ -368,12 +465,12 @@ func TestFat_timelineWiring(t *testing.T) {
 		{
 			name: "CreatePost",
 			wire: func(f *service.Fat, db *sqlite.Database) { service.CreatePost(f, db, time.Now) },
-			call: func(f *service.Fat) { _, _ = f.CreatePost(t.Context(), "u_x", "Hi") },
+			call: func(f *service.Fat) { _, _ = f.CreatePost(t.Context(), "u_x", "", "Hi") },
 		},
 		{
 			name: "CreateComment",
 			wire: func(f *service.Fat, db *sqlite.Database) { service.CreateComment(f, db, time.Now) },
-			call: func(f *service.Fat) { _, _ = f.CreateComment(t.Context(), "u_x", "p_x", "Hi") },
+			call: func(f *service.Fat) { _, _ = f.CreateComment(t.Context(), "u_x", "p_x", "", "Hi") },
 		},
 		{
 			name: "GetTimeline",
@@ -424,7 +521,16 @@ func newTimelineFat(t *testing.T, db *sqlite.Database, c *clock, group model.Gro
 func createPost(t *testing.T, fat *service.Fat, author model.User, body string) model.Post {
 	t.Helper()
 
-	p, err := fat.CreatePost(t.Context(), author.ID, body)
+	p, err := fat.CreatePost(t.Context(), author.ID, token(t), body)
 	is.NotError(t, err)
 	return p
+}
+
+// token for a form, new each time.
+func token(t *testing.T) string {
+	t.Helper()
+
+	formToken, err := model.NewFormToken(rand.Reader)
+	is.NotError(t, err)
+	return formToken.String()
 }

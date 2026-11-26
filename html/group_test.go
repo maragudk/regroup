@@ -304,7 +304,7 @@ func TestTimelineDay(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run("heads "+test.name, func(t *testing.T) {
-			section := render(t, html.TimelineDay(test.day, now))
+			section := render(t, html.TimelineDay(test.day, now, html.PostsProps{}))
 
 			heading := regexp.MustCompile(`<h2 id="day-` + test.day.Date.String() + `-heading"[^>]*>(.*)</h2>`).FindStringSubmatch(section)
 			is.True(t, heading != nil, section)

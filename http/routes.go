@@ -1,6 +1,7 @@
 package http
 
 import (
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -18,6 +19,10 @@ type InjectHTTPRouterOptions struct {
 
 	// Now is the clock.
 	Now func() time.Time
+
+	// Random is the randomness that forms get their tokens from, such as [crypto/rand.Reader]. Reading
+	// from it must not fail.
+	Random io.Reader
 
 	// Extra, if not nil, returns something for the group page to show beside the name of the person
 	// who is signed in, and for the page that says the group is private to show under that.

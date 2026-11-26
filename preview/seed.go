@@ -160,7 +160,7 @@ func Seed(ctx context.Context, db *sqlite.Database, now time.Time, loc *time.Loc
 
 		p := posts[it.post]
 		if it.comment < 0 {
-			post, err := db.CreatePost(ctx, model.Post{Created: model.Time{T: it.at}, AuthorID: ids[p.author], Body: p.body})
+			post, err := db.CreatePost(ctx, model.Post{Created: model.Time{T: it.at}, AuthorID: ids[p.author], Body: p.body}, "")
 			if err != nil {
 				return false, errors.Wrap(err, "error creating post")
 			}
@@ -169,7 +169,7 @@ func Seed(ctx context.Context, db *sqlite.Database, now time.Time, loc *time.Loc
 		}
 
 		c := p.comments[it.comment]
-		if _, err := db.CreateComment(ctx, model.Comment{Created: model.Time{T: it.at}, PostID: created[it.post].ID, AuthorID: ids[c.author], Body: c.body}); err != nil {
+		if _, err := db.CreateComment(ctx, model.Comment{Created: model.Time{T: it.at}, PostID: created[it.post].ID, AuthorID: ids[c.author], Body: c.body}, ""); err != nil {
 			return false, errors.Wrap(err, "error creating comment")
 		}
 	}

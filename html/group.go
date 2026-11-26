@@ -41,6 +41,9 @@ type GroupPageProps struct {
 
 	Composer ComposerProps
 
+	// Posts is what the posts of the timeline are shown with.
+	Posts PostsProps
+
 	Earlier EarlierPostsProps
 
 	// Extra is put beside the person's name on the sign, if not nil.
@@ -79,7 +82,7 @@ func GroupPage(props GroupPageProps) Node {
 					P(Class(postColumn+" mt-10 text-stone-600"), Text("Nothing has been posted yet. The first post goes in the field above.")),
 				),
 				Map(props.Timeline.Days, func(day model.TimelineDay) Node {
-					return TimelineDay(day, props.Now)
+					return TimelineDay(day, props.Now, props.Posts)
 				}),
 			),
 			EarlierPosts(props.Earlier),
@@ -157,6 +160,10 @@ type ComposerProps struct {
 	// Fresh, if not empty, becomes part of the field's ID, and the form sends it along. A field with
 	// another ID than the one on a page takes that one's place, with nothing typed in it.
 	Fresh string
+
+	// Token of the form, which it sends along, so that sending it again does not post twice. Each form
+	// that is shown needs a new one.
+	Token string
 }
 
 // Composer is the form a post is written in.
@@ -170,6 +177,7 @@ func Composer(props ComposerProps) Node {
 		data.On("submit", "@post('/posts', "+request+")"),
 		Input(Type("hidden"), Name("days"), Value(joinDays(props.Days))),
 		Input(Type("hidden"), Name("field"), Value(props.Fresh)),
+		Input(Type("hidden"), Name("token"), Value(props.Token)),
 		Div(Class("flex items-end gap-2"),
 			Label(For(fieldID), Class("sr-only"), Text("Write to the group")),
 			textarea(fieldID, "Write to the group", "3", props.Body, props.Message != "", "composer-message", "min-h-[52px] px-[22px] py-3"),
@@ -215,15 +223,22 @@ func message(id, text string) Node {
 	)
 }
 
-// TimelineDay is one day of the timeline: its heading and its posts. Now, in the group's time zone, decides
-// whether the heading names the year.
-func TimelineDay(day model.TimelineDay, now time.Time) Node {
+// TimelineDay is one day of the timeline: its heading and its posts, shown with the given props. Now, in
+// the group's time zone, decides whether the heading names the year.
+func TimelineDay(day model.TimelineDay, now time.Time, props PostsProps) Node {
 	return Section(Data("day", day.Date.String()), Class("mt-12 lg:mt-14"),
 		DayHeading(day, now),
 		Div(ID(DayPostsID(day.Date)),
-			TimelinePosts(day.Posts),
+			TimelinePosts(day.Posts, props),
 		),
 	)
+}
+
+// PostsProps is what posts on the timeline are shown with.
+type PostsProps struct {
+	// Token, if not nil, returns a new token for each form to add a comment that is shown. See
+	// [ComposerProps.Token].
+	Token func() string
 }
 
 // DayHeading of the given day: "Today" or "Yesterday" with the date beside it, or the date written out.
@@ -255,11 +270,16 @@ func dayDate(date string) Node {
 	return Span(Class("font-sans text-base/none font-normal tracking-normal whitespace-nowrap text-stone-600"), Text(date))
 }
 
-// TimelinePosts as they are shown under their day's heading. Each has a place for its comments, which
-// is empty until [Comments] fills it, and the form to add one.
-func TimelinePosts(posts []model.TimelinePost) Node {
+// TimelinePosts as they are shown under their day's heading, with the given props. Each has a place for
+// its comments, which is empty until [Comments] fills it, and the form to add one.
+func TimelinePosts(posts []model.TimelinePost, props PostsProps) Node {
 	return Map(posts, func(p model.TimelinePost) Node {
 		id := p.ID.String()
+
+		var token string
+		if props.Token != nil {
+			token = props.Token()
+		}
 
 		return Article(ID("post-"+id), Data("post", id), Class("mb-9 grid grid-cols-1 gap-y-2 lg:grid-cols-[200px_608px] lg:gap-x-8"),
 			Div(Class("flex flex-wrap items-baseline gap-x-3 lg:block"),
@@ -284,7 +304,7 @@ func TimelinePosts(posts []model.TimelinePost) Node {
 					),
 					Div(Class("mt-4 border-l border-stone-200 pl-5 lg:pl-6"),
 						Comments(CommentsProps{PostID: p.ID}),
-						CommentForm(CommentFormProps{PostID: p.ID}),
+						CommentForm(CommentFormProps{PostID: p.ID, Token: token}),
 					),
 				),
 			),
@@ -381,6 +401,9 @@ type CommentFormProps struct {
 
 	// Fresh, if not empty, becomes part of the field's ID. See [ComposerProps.Fresh].
 	Fresh string
+
+	// Token of the form. See [ComposerProps.Token].
+	Token string
 }
 
 // CommentForm is the form a comment on a post is written in.
@@ -396,6 +419,7 @@ func CommentForm(props CommentFormProps) Node {
 		data.On("submit", "@post('/comments', "+request+")"),
 		Input(Type("hidden"), Name("post"), Value(id)),
 		Input(Type("hidden"), Name("field"), Value(props.Fresh)),
+		Input(Type("hidden"), Name("token"), Value(props.Token)),
 		Div(Class("flex items-end gap-2"),
 			Label(For(fieldID), Class("sr-only"), Text("Write a comment")),
 			textarea(fieldID, "Write a comment", "2", props.Body, props.Message != "", messageID, "min-h-11 px-[18px] py-2"),

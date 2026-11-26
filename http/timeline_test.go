@@ -3,9 +3,12 @@ package http_test
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,6 +26,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	nethtml "golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
+	"hegel.dev/go/hegel"
 	gluehttp "maragu.dev/glue/http"
 	. "maragu.dev/gomponents"
 	. "maragu.dev/gomponents/html"
@@ -279,6 +283,28 @@ func TestTimeline(t *testing.T) {
 		is.EqualSlice(t, []string{"Post", "Comment"}, texts(all(doc, tag("button"))))
 		is.EqualSlice(t, []string{"/posts", "/comments/open", "/comments", "/posts/earlier"}, attrs(all(doc, tag("form")), "action"))
 		is.Equal(t, 0, len(all(doc, tag("input")))-len(all(doc, func(n *nethtml.Node) bool { return n.Data == "input" && attr(n, "type") == "hidden" })))
+	})
+
+	t.Run("gives each form that makes something a token of its own", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		for i := range 3 {
+			a.createPost(t, signe, base.Add(-time.Duration(i)*time.Hour), "Cake.")
+		}
+		cookie := a.signIn(t, signe)
+
+		doc := parse(t, a.get(t, cookie, "/").Body.String())
+		forms := append(all(doc, id("composer")), all(doc, func(n *nethtml.Node) bool { return strings.HasSuffix(attr(n, "id"), "-comment-form") })...)
+		is.Equal(t, 4, len(forms))
+		tokens := map[string]bool{}
+		for _, form := range forms {
+			token := attr(one(t, form, named("token")), "value")
+			_, err := model.ParseFormToken(token)
+			is.NotError(t, err, token)
+			tokens[token] = true
+		}
+		is.Equal(t, 4, len(tokens))
+		is.Equal(t, 4, len(all(doc, named("token"))))
 	})
 
 	t.Run("answers a path that is not there with a page that has nothing of the group on it", func(t *testing.T) {
@@ -589,6 +615,165 @@ func TestTimeline_post(t *testing.T) {
 		is.Equal(t, "That was not posted", text(one(t, doc, tag("h1"))))
 		is.True(t, strings.Contains(text(doc), "Write something first."), text(doc))
 		is.Equal(t, 1, a.count(t, "posts"))
+	})
+}
+
+func TestTimeline_again(t *testing.T) {
+	t.Run("posts once when the same form is sent again, answers again as the first time, and gives a new token each time", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		cookie := a.signIn(t, signe)
+		sent := newToken(t)
+
+		var posts, tokens []string
+		for _, body := range []string{"Cake.", "Cake!", ""} {
+			res := a.post(t, cookie, "/posts", url.Values{"body": {body}, "days": {"2031-03-14"}, "token": {sent}}, true)
+			is.Equal(t, http.StatusOK, res.Code)
+			patches := a.patches(t, res)
+			is.Equal(t, 2, len(patches))
+			article := one(t, patches[1], tag("article"))
+			is.Equal(t, "Cake.", text(one(t, article, hasAttr("data-body"))))
+			posts = append(posts, attr(article, "data-post"))
+			tokens = append(tokens, attr(one(t, patches[0], named("token")), "value"))
+		}
+		is.Equal(t, 1, a.count(t, "posts"))
+		is.Equal(t, posts[0], posts[1])
+		is.Equal(t, posts[0], posts[2])
+		for i, token := range tokens {
+			_, err := model.ParseFormToken(token)
+			is.NotError(t, err)
+			is.True(t, token != sent, "the composer kept the token that was sent")
+			is.True(t, !slices.Contains(tokens[:i], token), "the composer got a token it had before")
+		}
+
+		res := a.post(t, cookie, "/posts", url.Values{"body": {"Cake."}, "token": {sent}}, false)
+		is.Equal(t, http.StatusSeeOther, res.Code)
+		is.Equal(t, 1, a.count(t, "posts"))
+	})
+
+	t.Run("comments once when the same form is sent again, answers again as the first time, and gives a new token each time", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
+		cookie := a.signIn(t, signe)
+		sent := newToken(t)
+
+		var tokens []string
+		for _, body := range []string{"Yes.", "Yes!", ""} {
+			res := a.post(t, cookie, "/comments", url.Values{"post": {post.ID.String()}, "body": {body}, "token": {sent}}, true)
+			is.Equal(t, http.StatusOK, res.Code)
+			patch := a.patches(t, res)[0]
+			is.EqualSlice(t, []string{"Yes."}, texts(all(one(t, patch, id("post-"+post.ID.String()+"-comments")), hasAttr("data-body"))))
+			tokens = append(tokens, attr(one(t, one(t, patch, id("post-"+post.ID.String()+"-comment-form")), named("token")), "value"))
+		}
+		is.Equal(t, 1, a.count(t, "comments"))
+		for i, token := range tokens {
+			_, err := model.ParseFormToken(token)
+			is.NotError(t, err)
+			is.True(t, token != sent, "the form kept the token that was sent")
+			is.True(t, !slices.Contains(tokens[:i], token), "the form got a token it had before")
+		}
+
+		res := a.post(t, cookie, "/comments", url.Values{"post": {post.ID.String()}, "body": {"Yes."}, "token": {sent}}, false)
+		is.Equal(t, http.StatusSeeOther, res.Code)
+		is.Equal(t, 1, a.count(t, "comments"))
+	})
+
+	t.Run("gives a refused form a new token, and makes nothing", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
+		cookie := a.signIn(t, signe)
+
+		for path, form := range map[string]url.Values{
+			"/posts":    {"body": {" "}, "token": {newToken(t)}},
+			"/comments": {"body": {" "}, "token": {newToken(t)}, "post": {post.ID.String()}},
+		} {
+			res := a.post(t, cookie, path, form, true)
+			is.Equal(t, http.StatusOK, res.Code, path)
+			token := attr(one(t, a.patches(t, res)[0], named("token")), "value")
+			_, err := model.ParseFormToken(token)
+			is.NotError(t, err, path)
+			is.True(t, token != form.Get("token"), path)
+		}
+		is.Equal(t, 1, a.count(t, "posts"))
+		is.Equal(t, 0, a.count(t, "comments"))
+	})
+
+	t.Run("refuses a form without a token, or with one that is not one, with a plain error, and makes nothing", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
+		cookie := a.signIn(t, signe)
+
+		for _, token := range []string{"", "not a token", "q6urq6urq6urq6urq6urqx", newToken(t) + "A"} {
+			for _, datastar := range []bool{true, false} {
+				for path, form := range map[string]url.Values{
+					"/posts":    {"body": {"Cake."}, "token": {token}},
+					"/comments": {"body": {"Yes."}, "token": {token}, "post": {post.ID.String()}},
+				} {
+					res := a.post(t, cookie, path, form, datastar)
+					is.Equal(t, http.StatusBadRequest, res.Code, path+" "+token)
+					is.True(t, res.Header().Get("Content-Type") != "text/event-stream", path)
+				}
+			}
+		}
+		is.Equal(t, 1, a.count(t, "posts"))
+		is.Equal(t, 0, a.count(t, "comments"))
+	})
+
+	t.Run("makes exactly one post or comment for each form, however often and in whatever order each is sent", func(t *testing.T) {
+		a := newApp(t)
+		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
+		cookie := a.signIn(t, signe)
+
+		hegel.Test(t, func(ht *hegel.T) {
+			_, err := a.db.H.DB.ExecContext(t.Context(), "delete from comments")
+			is.NotError(ht, err)
+			_, err = a.db.H.DB.ExecContext(t.Context(), "delete from posts where id != ?", post.ID)
+			is.NotError(ht, err)
+
+			// Forms to post and forms to comment, each with its token, sent in any order, as often as
+			// it comes up, by Datastar or by the browser itself.
+			type form struct {
+				path   string
+				values url.Values
+			}
+			var forms []form
+			for range hegel.Draw(ht, hegel.Integers(1, 3)) {
+				forms = append(forms, form{path: "/posts", values: url.Values{"body": {"Cake."}, "token": {newToken(ht)}}})
+			}
+			for range hegel.Draw(ht, hegel.Integers(0, 3)) {
+				forms = append(forms, form{path: "/comments", values: url.Values{"body": {"Yes."}, "token": {newToken(ht)}, "post": {post.ID.String()}}})
+			}
+
+			sends := hegel.Draw(ht, hegel.Lists(hegel.Integers(0, len(forms)-1)).MinSize(1).MaxSize(15))
+			sent := map[int]bool{}
+			for _, i := range sends {
+				datastar := hegel.Draw(ht, hegel.Booleans())
+				res := a.post(t, cookie, forms[i].path, forms[i].values, datastar)
+				if want := map[bool]int{true: http.StatusOK, false: http.StatusSeeOther}[datastar]; res.Code != want {
+					ht.Fatalf("sending %v answered %v, not %v", forms[i].path, res.Code, want)
+				}
+				sent[i] = true
+			}
+
+			var posts, comments int
+			for i := range sent {
+				if forms[i].path == "/posts" {
+					posts++
+				} else {
+					comments++
+				}
+			}
+			if n := a.count(t, "posts") - 1; n != posts {
+				ht.Fatalf("%v sends of %v forms to post made %v posts", len(sends), posts, n)
+			}
+			if n := a.count(t, "comments"); n != comments {
+				ht.Fatalf("%v sends of %v forms to comment made %v comments", len(sends), comments, n)
+			}
+		})
 	})
 }
 
@@ -934,11 +1119,14 @@ func TestTimeline_comments(t *testing.T) {
 	t.Run("answers with text even when what it puts back on the page was not", func(t *testing.T) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
+		post := a.createPost(t, signe, base, "Cake.")
 		cookie := a.signIn(t, signe)
 
+		// A comment on a post that is not there is not found, whatever else is sent, so the comment is
+		// on a post that is.
 		for path, form := range map[string]url.Values{
 			"/posts":    {"body": {""}, "field": {"\r\nevent: \xb7"}, "days": {"\xff"}},
-			"/comments": {"body": {"\xff"}, "field": {"\xb7"}, "post": {"p_\xff"}},
+			"/comments": {"body": {"\xff"}, "field": {"\xb7"}, "post": {post.ID.String()}},
 		} {
 			res := a.post(t, cookie, path, form, true)
 			is.Equal(t, http.StatusOK, res.Code, path)
@@ -1476,16 +1664,16 @@ func TestInjectHTTPRouter(t *testing.T) {
 }
 
 func FuzzTimeline(f *testing.F) {
-	f.Add("Cake in the kitchen.", "2031-03-14", "", "")
-	f.Add("", "", "", "")
-	f.Add("<script>alert(1)</script>", "<b>,2031-03-13", "\"><script>", "garbage")
-	f.Add("a\r\nb\x00", "2031-03-13,2031-03-12", "p_1", model.TimelineCursor{Created: model.Time{T: base}, Seq: 1}.String())
-	f.Add(strings.Repeat("æ", model.PostBodyMaxLength+1), "\xff", "\r\nevent: x", "AQAAAAAAAAAAAAAAAAAAAAAB")
-	f.Add("x", "0000-00-00,9999-12-31,2031-13-01,#timeline", "x'+alert(1)+'", "Af__x3zt0ygAAAAAAAAAAAA")
+	f.Add("Cake in the kitchen.", "2031-03-14", "", "", "q6urq6urq6urq6urq6urqw")
+	f.Add("", "", "", "", "")
+	f.Add("<script>alert(1)</script>", "<b>,2031-03-13", "\"><script>", "garbage", "\"><script>")
+	f.Add("a\r\nb\x00", "2031-03-13,2031-03-12", "p_1", model.TimelineCursor{Created: model.Time{T: base}, Seq: 1}.String(), "q6urq6urq6urq6urq6urqx")
+	f.Add(strings.Repeat("æ", model.PostBodyMaxLength+1), "\xff", "\r\nevent: x", "AQAAAAAAAAAAAAAAAAAAAAAB", "q6urq6urq6u\nrq6urq6urqw")
+	f.Add("x", "0000-00-00,9999-12-31,2031-13-01,#timeline", "x'+alert(1)+'", "Af__x3zt0ygAAAAAAAAAAAA", "AQAAAZvNMb8AAAAAAAAAACo")
 	// Found by fuzzing: a refusal put a field value that is not valid UTF-8 back into the answer as it came.
-	f.Add("", "\xff", "\r\nevent: \xb7", "AQAAAAAAAAAAAAAAAAAAAAAB")
+	f.Add("", "\xff", "\r\nevent: \xb7", "AQAAAAAAAAAAAAAAAAAAAAAB", "\xff")
 
-	f.Fuzz(func(t *testing.T, body, days, field, after string) {
+	f.Fuzz(func(t *testing.T, body, days, field, after, token string) {
 		a := newApp(t)
 		signe := sqlitetest.CreateUser(t, a.db, "Signe")
 		post := a.createPost(t, signe, base.Add(-time.Hour), "Cake.")
@@ -1524,6 +1712,25 @@ func FuzzTimeline(f *testing.F) {
 			for _, d := range a.decode(t, res) {
 				is.True(t, regexp.MustCompile(`^(|#timeline|#day-\d{4}-\d{2}-\d{2}-posts)$`).MatchString(d.Selector), d.Selector)
 			}
+		}
+
+		// A form with any token is answered with patches or refused as a request the page could not
+		// have sent, and only a token that could have been made makes anything.
+		_, tokenErr := model.ParseFormToken(token)
+		for path, form := range map[string]url.Values{
+			"/posts":    {"body": {"Fuzzed."}, "token": {token}},
+			"/comments": {"body": {"Fuzzed."}, "token": {token}, "post": {post.ID.String()}},
+		} {
+			posts, comments := a.count(t, "posts"), a.count(t, "comments")
+			res = a.post(t, cookie, path, form, true)
+			if tokenErr != nil {
+				is.Equal(t, http.StatusBadRequest, res.Code, path)
+				is.Equal(t, posts, a.count(t, "posts"), path)
+				is.Equal(t, comments, a.count(t, "comments"), path)
+				continue
+			}
+			is.Equal(t, http.StatusOK, res.Code, path)
+			a.patches(t, res)
 		}
 	})
 }
@@ -1629,18 +1836,18 @@ func (s *store) CountActiveUsers(ctx context.Context) (int, error) {
 	return s.Database.CountActiveUsers(ctx)
 }
 
-func (s *store) CreatePost(ctx context.Context, p model.Post) (model.Post, error) {
+func (s *store) CreatePost(ctx context.Context, p model.Post, token model.FormToken) (model.Post, error) {
 	if err := s.fail["CreatePost"]; err != nil {
 		return model.Post{}, err
 	}
-	return s.Database.CreatePost(ctx, p)
+	return s.Database.CreatePost(ctx, p, token)
 }
 
-func (s *store) CreateComment(ctx context.Context, c model.Comment) (model.Comment, error) {
+func (s *store) CreateComment(ctx context.Context, c model.Comment, token model.FormToken) (model.Comment, error) {
 	if err := s.fail["CreateComment"]; err != nil {
 		return model.Comment{}, err
 	}
-	return s.Database.CreateComment(ctx, c)
+	return s.Database.CreateComment(ctx, c, token)
 }
 
 func (s *store) GetTimeline(ctx context.Context, reader model.UserID, after *model.TimelineCursor, limit int) ([]model.TimelinePost, *model.TimelineCursor, error) {
@@ -1706,7 +1913,7 @@ func newApp(t *testing.T, opts ...func(*config)) *app {
 		r.NotFound(gluehttp.NotFound(html.Page))
 
 		r.Group(func(r *gluehttp.Router) {
-			apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{Group: group, Now: a.clock.Now, Extra: c.extra})(r)
+			apphttp.InjectHTTPRouter(log, fat, apphttp.InjectHTTPRouterOptions{Group: group, Now: a.clock.Now, Random: rand.NewChaCha8([32]byte{}), Extra: c.extra})(r)
 		})
 	})
 	a.handler = r.Mux
@@ -1740,9 +1947,18 @@ func (a *app) get(t *testing.T, cookie *http.Cookie, path string) *httptest.Resp
 	return res
 }
 
-// post the given form, as Datastar does or as a browser does by itself.
+// post the given form, as Datastar does or as a browser does by itself. A form to post or to comment
+// carries a new token, as one from the page does, unless the test gives it one or an empty one.
 func (a *app) post(t *testing.T, cookie *http.Cookie, path string, form url.Values, datastar bool) *httptest.ResponseRecorder {
 	t.Helper()
+
+	if (path == "/posts" || path == "/comments") && !form.Has("token") {
+		form = maps.Clone(form)
+		if form == nil {
+			form = url.Values{}
+		}
+		form.Set("token", newToken(t))
+	}
 
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -1788,7 +2004,7 @@ func (a *app) patches(t *testing.T, res *httptest.ResponseRecorder) []*nethtml.N
 func (a *app) createPost(t *testing.T, author model.User, at time.Time, body string) model.Post {
 	t.Helper()
 
-	p, err := a.db.CreatePost(t.Context(), model.Post{Created: model.Time{T: at}, AuthorID: author.ID, Body: body})
+	p, err := a.db.CreatePost(t.Context(), model.Post{Created: model.Time{T: at}, AuthorID: author.ID, Body: body}, "")
 	is.NotError(t, err)
 	return p
 }
@@ -1796,7 +2012,7 @@ func (a *app) createPost(t *testing.T, author model.User, at time.Time, body str
 func (a *app) createComment(t *testing.T, author model.User, post model.Post, at time.Time, body string) model.Comment {
 	t.Helper()
 
-	c, err := a.db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: at}, PostID: post.ID, AuthorID: author.ID, Body: body})
+	c, err := a.db.CreateComment(t.Context(), model.Comment{Created: model.Time{T: at}, PostID: post.ID, AuthorID: author.ID, Body: body}, "")
 	is.NotError(t, err)
 	return c
 }
@@ -1809,6 +2025,15 @@ func (a *app) count(t *testing.T, table string) int {
 	err := a.db.H.Get(t.Context(), &count, "select count(*) from "+table)
 	is.NotError(t, err)
 	return count
+}
+
+// newToken for a form, as the page has.
+func newToken(t testing.TB) string {
+	t.Helper()
+
+	token, err := model.NewFormToken(cryptorand.Reader)
+	is.NotError(t, err)
+	return token.String()
 }
 
 func parse(t *testing.T, page string) *nethtml.Node {

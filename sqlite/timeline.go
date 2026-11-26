@@ -10,21 +10,29 @@ import (
 	"app/model"
 )
 
-// CreatePost with the time posted, the author, and the body as given.
-// The post is stored after every post before it, which breaks ties between equal times on the timeline.
-func (d *Database) CreatePost(ctx context.Context, p model.Post) (model.Post, error) {
+// CreatePost with the time posted, the author, and the body as given, sent from the form with the given
+// token. The post is stored after every post before it, which breaks ties between equal times on the
+// timeline.
+//
+// If the author has made a post from a form with the same token before, CreatePost returns that post and
+// stores nothing. An empty token is a post that was not sent from a form, which is always stored.
+func (d *Database) CreatePost(ctx context.Context, p model.Post, token model.FormToken) (model.Post, error) {
 	var created model.Post
 	err := d.H.InTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		if err := postByFormToken(ctx, tx, &created, p.AuthorID, token); !errors.Is(err, model.ErrorPostNotFound) {
+			return err
+		}
+
 		seq, err := nextSeq(ctx, tx, "posts")
 		if err != nil {
 			return err
 		}
 
 		query := `
-			insert into posts (seq, created, author_id, body)
-			values (?, ?, ?, ?)
+			insert into posts (seq, created, author_id, body, form_token)
+			values (?, ?, ?, ?, nullif(?, ''))
 			returning id, created, author_id, body`
-		return tx.Get(ctx, &created, query, seq, p.Created, p.AuthorID, p.Body)
+		return tx.Get(ctx, &created, query, seq, p.Created, p.AuthorID, p.Body, token)
 	})
 	if err != nil {
 		return model.Post{}, err
@@ -32,11 +40,19 @@ func (d *Database) CreatePost(ctx context.Context, p model.Post) (model.Post, er
 	return created, nil
 }
 
-// CreateComment with the time, the post, the author, and the body as given.
-// Returns [model.ErrorPostNotFound] if there is no such post.
-func (d *Database) CreateComment(ctx context.Context, c model.Comment) (model.Comment, error) {
+// CreateComment with the time, the post, the author, and the body as given, sent from the form with the
+// given token. Returns [model.ErrorPostNotFound] if there is no such post.
+//
+// If the author has made a comment from a form with the same token before, CreateComment returns that
+// comment, whatever its post, and stores nothing. An empty token is a comment that was not sent from a
+// form, which is always stored.
+func (d *Database) CreateComment(ctx context.Context, c model.Comment, token model.FormToken) (model.Comment, error) {
 	var created model.Comment
 	err := d.H.InTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		if err := commentByFormToken(ctx, tx, &created, c.AuthorID, token); !errors.Is(err, model.ErrorCommentNotFound) {
+			return err
+		}
+
 		if err := postExists(ctx, tx, c.PostID); err != nil {
 			return err
 		}
@@ -47,15 +63,71 @@ func (d *Database) CreateComment(ctx context.Context, c model.Comment) (model.Co
 		}
 
 		query := `
-			insert into comments (seq, created, post_id, author_id, body)
-			values (?, ?, ?, ?, ?)
+			insert into comments (seq, created, post_id, author_id, body, form_token)
+			values (?, ?, ?, ?, ?, nullif(?, ''))
 			returning id, created, post_id, author_id, body`
-		return tx.Get(ctx, &created, query, seq, c.Created, c.PostID, c.AuthorID, c.Body)
+		return tx.Get(ctx, &created, query, seq, c.Created, c.PostID, c.AuthorID, c.Body, token)
 	})
 	if err != nil {
 		return model.Comment{}, err
 	}
 	return created, nil
+}
+
+// GetPost by its ID. Returns [model.ErrorPostNotFound] if there is no such post.
+func (d *Database) GetPost(ctx context.Context, id model.PostID) (model.Post, error) {
+	var p model.Post
+	if err := d.H.Get(ctx, &p, `select id, created, author_id, body from posts where id = ?`, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Post{}, model.ErrorPostNotFound
+		}
+		return model.Post{}, err
+	}
+	return p, nil
+}
+
+// GetPostByFormToken that the given author made from a form with the given token.
+// Returns [model.ErrorPostNotFound] if there is none.
+func (d *Database) GetPostByFormToken(ctx context.Context, author model.UserID, token model.FormToken) (model.Post, error) {
+	var p model.Post
+	if err := postByFormToken(ctx, d.H, &p, author, token); err != nil {
+		return model.Post{}, err
+	}
+	return p, nil
+}
+
+// GetCommentByFormToken that the given author made from a form with the given token.
+// Returns [model.ErrorCommentNotFound] if there is none.
+func (d *Database) GetCommentByFormToken(ctx context.Context, author model.UserID, token model.FormToken) (model.Comment, error) {
+	var c model.Comment
+	if err := commentByFormToken(ctx, d.H, &c, author, token); err != nil {
+		return model.Comment{}, err
+	}
+	return c, nil
+}
+
+// postByFormToken into p, or return [model.ErrorPostNotFound]. No post has an empty token.
+func postByFormToken(ctx context.Context, q querier, p *model.Post, author model.UserID, token model.FormToken) error {
+	query := `select id, created, author_id, body from posts where author_id = ? and form_token = ?`
+	if err := q.Get(ctx, p, query, author, token); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.ErrorPostNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+// commentByFormToken into c, or return [model.ErrorCommentNotFound]. No comment has an empty token.
+func commentByFormToken(ctx context.Context, q querier, c *model.Comment, author model.UserID, token model.FormToken) error {
+	query := `select id, created, post_id, author_id, body from comments where author_id = ? and form_token = ?`
+	if err := q.Get(ctx, c, query, author, token); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.ErrorCommentNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 // timelinePostRow is a [model.TimelinePost] with its place in the order posts were stored in.
