@@ -1,6 +1,6 @@
 # Verification
 
-How we know regroup does what it should, given that Markus does not read the code. Discussed on 2026-11-26.
+How we know regroup does what it should, given that Markus does not read the code. Discussed on 2026-11-26. The rules every builder follows are in the Testing section of `AGENTS.md`. This file holds the reasoning and what is not built or not decided.
 
 ## Agreed
 
@@ -8,19 +8,42 @@ How we know regroup does what it should, given that Markus does not read the cod
 - Markus judges each piece of work in two ways:
   - A preview: a regroup instance on the Mac mini, reachable over Tailscale, filled with a made-up office group and updated as work lands. Each report from the lead ends with a short list of things to try.
   - A private page of screenshots covering every new screen and state, on desktop and phone.
+- The app is to be robust from the first build. Markus: "I'd also like to use property-based testing with hegel in the Go code where it makes sense", and bombadil, "and also the usual unit and integration testing, and fuzz testing where it makes sense. Let's make this app robust." He agreed the plan below the same day.
+
+| Kind of test | What it is for here | When it runs |
+|---|---|---|
+| Unit and integration, against real SQLite and the real router | Every behaviour, and every verdict Markus gives | Every pull request |
+| Property-based with hegel, simple | Grouping by day across time zones, escaping of post text, paging, sign-in tokens | Every pull request |
+| Property-based with hegel, stateful | Generated sequences of actions: people and roles, sign-in links working once and expiring, timeline order and the "new" marks | Every pull request, longer runs nightly |
+| Go fuzzing | Anything that parses what a person sends: form values, paging cursors, later Markdown and photo uploads | Short on every pull request, longer nightly |
+| Bombadil | Browser faults, and product rules as checks per role | A short run per piece of work, nightly on `main`, not a merge gate until it has run a while without false alarms |
+| Screenshots and the preview | Markus's look | Every piece of work |
+
+- The clock and randomness are passed in from the first build.
+- There is one test-only way to sign in, used by bombadil and by the preview, and it is compiled out of production by a build tag.
+- A nightly run opens an issue when it fails.
+- Mutation testing, reviews by other models, and a security review wait for the gate before production.
 
 ## Decided by the lead, for Markus to overrule
 
-- While the product is still taking shape, automated checking stays light: the builders' ordinary tests, lint, CI on every pull request, a fresh reviewer for each feature, and for every fix a test shown to fail with the fault in place.
-- Markus's verdicts are written into the to-do file of the piece of work. A behaviour he has approved gets a test, so that later changes cannot quietly undo it. Where a verdict is a guarantee the group can rely on, the lead proposes wording for `docs/spec.md`.
+- Markus's verdicts are written into the to-do file of the piece of work. Where a verdict is a guarantee the group can rely on, the lead proposes wording for `docs/spec.md`.
 - The preview runs what is merged to `main`.
+
+## Not built yet
+
+- The preview instance and its made-up office group.
+- The nightly workflow.
+- Hegel in `go.mod`, and `.hegel/` in `.gitignore`.
+- A pinned bombadil, its checks, and a CI job that starts the app and keeps the trace.
+- What bombadil needs from the app: a seeded database with one person per role, stable markers on posts, comments, and moderation notes, and a visible error when a Datastar request fails.
 
 ## Open
 
-- What has to be true before Markus says "production". The lead's proposal, not yet discussed: a small model of a group checked against generated histories of made-up people; a sweep that every page refuses outsiders; reviews by other models with the spec's rules as the things to break; planted faults and mutation testing to prove the tests have teeth; a security review of signing in and invitations.
-- Whether time, randomness, and email should be replayable from a seed from the start, as in s4ql, or added when the heavier checks are.
+- What else has to be true before Markus says "production", beyond mutation testing, reviews by other models, and a security review.
 - How sign-in emails reach Markus on the preview.
 - Checks for the promises in the core values, such as that no page asks a third party for anything.
+- How well bombadil explores a real timeline. The trial only had a placeholder page.
+- How well hegel shrinks long stateful failures, and whether a failure can be replayed from its printed code.
 
 ## Found while evaluating tools
 
