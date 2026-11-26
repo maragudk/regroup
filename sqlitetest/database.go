@@ -28,7 +28,7 @@ func WithFixtures(fixtures ...string) sqlitetest.NewHelperOption {
 }
 
 // CreateUser for testing, active and confirmed, with the given name and an account of its own.
-// The user joins the group at the moment it is created.
+// Nothing posted or commented before it is created is new to it.
 func CreateUser(t testing.TB, db *sqlite.Database, name string) model.User {
 	t.Helper()
 

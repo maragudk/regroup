@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// PostID of a [Post], with the prefix "p_".
+// PostID of a [Post].
 type PostID string
 
 // String satisfies [fmt.Stringer].
@@ -14,7 +14,7 @@ func (i PostID) String() string {
 	return string(i)
 }
 
-// CommentID of a [Comment], with the prefix "c_".
+// CommentID of a [Comment].
 type CommentID string
 
 // String satisfies [fmt.Stringer].
@@ -47,23 +47,25 @@ const (
 	CommentBodyMaxLength = 2_000
 )
 
-// CleanPostBody for storing, or return why it can't be stored. See [cleanBody] for the rules.
+// CleanPostBody for storing, or return why it can't be stored. A body is plain text:
+//   - It must be valid UTF-8, or [ErrorBodyInvalid].
+//   - Line breaks are kept, and "\r\n" and a lone "\r" become "\n".
+//   - Whitespace at the start and the end is trimmed.
+//   - What is left must hold something other than whitespace and invisible formatting characters
+//     (Unicode category Cf, such as a zero-width space), or [ErrorBodyEmpty].
+//   - It must contain no control characters other than line breaks and tabs, or [ErrorBodyInvalid].
+//   - It must be at most [PostBodyMaxLength] characters (runes), or [ErrorBodyTooLong].
 func CleanPostBody(body string) (string, error) {
 	return cleanBody(body, PostBodyMaxLength)
 }
 
-// CleanCommentBody for storing, or return why it can't be stored. See [cleanBody] for the rules.
+// CleanCommentBody for storing, or return why it can't be stored. The rules are those of [CleanPostBody],
+// with a maximum of [CommentBodyMaxLength] characters (runes).
 func CleanCommentBody(body string) (string, error) {
 	return cleanBody(body, CommentBodyMaxLength)
 }
 
-// cleanBody of a post or a comment, which is plain text:
-//   - It must be valid UTF-8, or [ErrorBodyInvalid].
-//   - Line breaks are kept, and "\r\n" and a lone "\r" become "\n".
-//   - Whitespace at the start and the end is trimmed.
-//   - What is left must not be empty, or [ErrorBodyEmpty].
-//   - It must contain no control characters other than line breaks and tabs, or [ErrorBodyInvalid].
-//   - It must be at most maxLength characters (runes), or [ErrorBodyTooLong].
+// cleanBody by the rules of [CleanPostBody], with the given maximum length.
 func cleanBody(body string, maxLength int) (string, error) {
 	if !utf8.ValidString(body) {
 		return "", ErrorBodyInvalid
@@ -73,7 +75,7 @@ func cleanBody(body string, maxLength int) (string, error) {
 	body = strings.ReplaceAll(body, "\r", "\n")
 	body = strings.TrimSpace(body)
 
-	if body == "" {
+	if !strings.ContainsFunc(body, func(r rune) bool { return !unicode.IsSpace(r) && !unicode.Is(unicode.Cf, r) }) {
 		return "", ErrorBodyEmpty
 	}
 

@@ -11,7 +11,7 @@ import (
 )
 
 // TestPreviewBuild proves that the preview's seed and its sign-in route are only in the app built with
-// the preview build tag. It checks two things for each build, and checks the preview build too, so that
+// the preview build tag. The default build uses the tags the Dockerfile builds the app with. It checks two things for each build, and checks the preview build too, so that
 // a check which could never find anything would fail here instead of passing:
 //   - whether the app depends on the preview package at all, from go list, and
 //   - whether the built binary holds the route's path, the made-up group's name, and a line of its posts.
@@ -21,8 +21,8 @@ func TestPreviewBuild(t *testing.T) {
 		tags     []string
 		expected bool
 	}{
-		{name: "the default build has neither the seed nor the sign-in route", tags: nil, expected: false},
-		{name: "the preview build has both, so the checks can see them", tags: []string{"-tags", "preview"}, expected: true},
+		{name: "the default build has neither the seed nor the sign-in route", tags: []string{"-tags", "sqlite_fts5,sqlite_math_functions"}, expected: false},
+		{name: "the preview build has both, so the checks can see them", tags: []string{"-tags", "preview,sqlite_fts5,sqlite_math_functions"}, expected: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			deps := goCommand(t, append(append([]string{"list", "-deps", "-f", "{{.ImportPath}}"}, test.tags...), ".")...)

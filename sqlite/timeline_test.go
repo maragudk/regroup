@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"hegel.dev/go/hegel"
 	"maragu.dev/is"
+	"maragu.dev/migrate"
 
 	"app/model"
 	"app/sqlite"
@@ -211,6 +213,51 @@ func TestDatabase_GetTimeline(t *testing.T) {
 		is.True(t, !posts[1].New)
 	})
 
+	t.Run("marks a page after the first against the look before the reader's latest look", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		thomas := sqlitetest.CreateUser(t, db, "Thomas")
+		createPost(t, db, thomas, base)
+		createPost(t, db, thomas, base.Add(time.Minute))
+
+		_, next, err := db.GetTimeline(t.Context(), signe.ID, nil, 1)
+		is.NotError(t, err)
+
+		// Looking again, say in another tab, makes everything on the timeline seen.
+		getTimeline(t, db, signe)
+
+		page2, _, err := db.GetTimeline(t.Context(), signe.ID, next, 1)
+		is.NotError(t, err)
+		is.True(t, !page2[0].New)
+	})
+
+	t.Run("marks a post as new even after the newest post before it is gone", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		thomas := sqlitetest.CreateUser(t, db, "Thomas")
+		createPost(t, db, thomas, base)
+		gone := createPost(t, db, thomas, base.Add(time.Minute))
+		getTimeline(t, db, signe)
+
+		is.NotError(t, db.H.Exec(t.Context(), `delete from posts where id = ?`, gone.ID))
+		p := createPost(t, db, thomas, base.Add(2*time.Minute))
+
+		posts := getTimeline(t, db, signe)
+		is.Equal(t, p.ID, posts[0].ID)
+		is.True(t, posts[0].New)
+	})
+
+	t.Run("refuses a limit below 1", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		createPost(t, db, signe, base)
+
+		for _, limit := range []int{0, -1} {
+			_, _, err := db.GetTimeline(t.Context(), signe.ID, nil, limit)
+			is.True(t, err != nil, fmt.Sprint("limit ", limit))
+		}
+	})
+
 	t.Run("keeps the marks of the first page on the pages after it", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")
@@ -268,6 +315,28 @@ func TestDatabase_GetTimeline(t *testing.T) {
 		posts = getTimeline(t, db, signe)
 		is.Equal(t, 4, posts[0].Comments)
 		is.Equal(t, 1, posts[0].NewComments)
+	})
+
+	t.Run("counts new comments per post, so opening one post's comments leaves another's new", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		thomas := sqlitetest.CreateUser(t, db, "Thomas")
+		p1 := createPost(t, db, thomas, base)
+		p2 := createPost(t, db, thomas, base.Add(time.Minute))
+		createComment(t, db, thomas, p1, base.Add(2*time.Minute))
+		createComment(t, db, thomas, p2, base.Add(3*time.Minute))
+		createComment(t, db, thomas, p2, base.Add(4*time.Minute))
+
+		posts := getTimeline(t, db, signe)
+		is.EqualSlice(t, []model.PostID{p2.ID, p1.ID}, ids(posts))
+		is.Equal(t, 2, posts[0].NewComments)
+		is.Equal(t, 1, posts[1].NewComments)
+
+		getComments(t, db, signe, p1)
+
+		posts = getTimeline(t, db, signe)
+		is.Equal(t, 2, posts[0].NewComments)
+		is.Equal(t, 0, posts[1].NewComments)
 	})
 
 	t.Run("keeps comments new until the post's comments are opened, however often the timeline is looked at", func(t *testing.T) {
@@ -452,6 +521,19 @@ func TestDatabase_GetComments(t *testing.T) {
 		is.True(t, !comments[2].New)
 	})
 
+	t.Run("does not mark comments from before the reader joined as new", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		thomas := sqlitetest.CreateUser(t, db, "Thomas")
+		p := createPost(t, db, thomas, base)
+		createComment(t, db, thomas, p, base.Add(time.Minute))
+		amira := sqlitetest.CreateUser(t, db, "Amira")
+		createComment(t, db, thomas, p, base.Add(2*time.Minute))
+
+		comments := getComments(t, db, amira, p)
+		is.True(t, !comments[0].New)
+		is.True(t, comments[1].New)
+	})
+
 	t.Run("opening one post's comments leaves another post's comments new", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")
@@ -490,6 +572,23 @@ func TestDatabase_GetComments(t *testing.T) {
 
 		_, err := db.GetComments(t.Context(), "u_nope", p.ID)
 		is.Error(t, model.ErrorUserNotFound, err)
+	})
+}
+
+func TestTimelineMigration(t *testing.T) {
+	t.Run("gives people from before the migration a read state, and migrates down and up again", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		migrations := os.DirFS("migrations")
+
+		is.NotError(t, migrate.To(t.Context(), db.H.DB.DB, migrations, "1755714454-auth"))
+		before := sqlitetest.CreateUser(t, db, "Before")
+		is.NotError(t, migrate.To(t.Context(), db.H.DB.DB, migrations, "1795703426-timeline"))
+
+		thomas := sqlitetest.CreateUser(t, db, "Thomas")
+		createPost(t, db, thomas, base)
+
+		posts := getTimeline(t, db, before)
+		is.True(t, posts[0].New)
 	})
 }
 

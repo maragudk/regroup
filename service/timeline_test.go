@@ -17,7 +17,8 @@ import (
 	"app/sqlitetest"
 )
 
-var base = time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+// base is not today, so that a test can tell the clock it gives from the real one.
+var base = time.Date(2031, 3, 14, 9, 0, 0, 0, time.UTC)
 
 // clock that a test sets, and that the operations read the time from.
 type clock struct {
@@ -85,6 +86,37 @@ func TestFat_CreatePost(t *testing.T) {
 	})
 }
 
+func TestFat_logging(t *testing.T) {
+	t.Run("logs IDs, and never the text of a post or a comment or anyone's email address, through every operation", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		signe := sqlitetest.CreateUser(t, db, "Signe")
+		thomas := sqlitetest.CreateUser(t, db, "Thomas")
+		var logs bytes.Buffer
+		fat := service.NewFat(service.NewFatOptions{Log: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
+		c := &clock{t: base}
+		service.CreatePost(fat, db, c.Now)
+		service.CreateComment(fat, db, c.Now)
+		service.GetTimeline(fat, db, c.Now, model.Group{Name: "The Loft", TimeZone: time.UTC})
+		service.GetComments(fat, db)
+
+		p, err := fat.CreatePost(t.Context(), signe.ID, "A secret about the coffee machine")
+		is.NotError(t, err)
+		comment, err := fat.CreateComment(t.Context(), thomas.ID, p.ID, "A secret about the printer")
+		is.NotError(t, err)
+		_, err = fat.GetTimeline(t.Context(), thomas.ID, "", 0)
+		is.NotError(t, err)
+		_, err = fat.GetComments(t.Context(), signe.ID, p.ID)
+		is.NotError(t, err)
+		_, err = fat.CreatePost(t.Context(), signe.ID, " ")
+		is.Error(t, model.ErrorBodyEmpty, err)
+
+		is.True(t, strings.Contains(logs.String(), comment.ID.String()), logs.String())
+		for _, secret := range []string{"secret", signe.Email.String(), thomas.Email.String()} {
+			is.True(t, !strings.Contains(logs.String(), secret), logs.String())
+		}
+	})
+}
+
 func TestFat_CreateComment(t *testing.T) {
 	t.Run("comments with the cleaned body by the acting user at the time the clock says", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
@@ -111,7 +143,7 @@ func TestFat_CreateComment(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")
 		fat := servicetest.NewFat(t)
-		service.CreatePost(fat, db, time.Now)
+		service.CreatePost(fat, db, (&clock{t: base}).Now)
 		service.CreateComment(fat, db, (&clock{t: base}).Now)
 
 		p, err := fat.CreatePost(t.Context(), signe.ID, "Cake")
@@ -157,25 +189,26 @@ func TestFat_GetTimeline(t *testing.T) {
 		c := &clock{}
 		fat := newTimelineFat(t, db, c, group)
 
-		// 23:30 UTC on the 24th is already the 25th in Copenhagen.
-		c.t = time.Date(2026, 11, 24, 23, 30, 0, 0, time.UTC)
+		// 23:30 UTC on the 12th is already the 13th in Copenhagen.
+		c.t = time.Date(2031, 3, 12, 23, 30, 0, 0, time.UTC)
 		p1 := createPost(t, fat, thomas, "Release shipped")
-		c.t = time.Date(2026, 11, 26, 8, 0, 0, 0, copenhagen)
+		c.t = time.Date(2031, 3, 14, 8, 0, 0, 0, copenhagen)
 		p2 := createPost(t, fat, thomas, "Cake in the kitchen")
 
-		c.t = time.Date(2026, 11, 26, 9, 0, 0, 0, copenhagen)
+		c.t = time.Date(2031, 3, 14, 9, 0, 0, 0, copenhagen)
 		timeline, err := fat.GetTimeline(t.Context(), signe.ID, "", 0)
 		is.NotError(t, err)
 		is.Equal(t, "", timeline.Next)
 		is.Equal(t, 2, len(timeline.Days))
 
-		is.Equal(t, model.Date{Year: 2026, Month: time.November, Day: 26}, timeline.Days[0].Date)
+		is.Equal(t, model.Date{Year: 2031, Month: time.March, Day: 14}, timeline.Days[0].Date)
 		is.True(t, timeline.Days[0].Today)
 		is.Equal(t, p2.ID, timeline.Days[0].Posts[0].ID)
 		is.True(t, timeline.Days[0].Posts[0].New)
 		is.Equal(t, "Thomas", timeline.Days[0].Posts[0].AuthorName)
+		is.Equal(t, copenhagen, timeline.Days[0].Posts[0].Created.T.Location())
 
-		is.Equal(t, model.Date{Year: 2026, Month: time.November, Day: 25}, timeline.Days[1].Date)
+		is.Equal(t, model.Date{Year: 2031, Month: time.March, Day: 13}, timeline.Days[1].Date)
 		is.True(t, timeline.Days[1].Yesterday)
 		is.Equal(t, p1.ID, timeline.Days[1].Posts[0].ID)
 	})
@@ -236,13 +269,20 @@ func TestFat_GetTimeline(t *testing.T) {
 		is.Error(t, model.ErrorCursorInvalid, err)
 	})
 
-	t.Run("refuses an inactive user", func(t *testing.T) {
+	t.Run("refuses an inactive user, on the first page and the ones after it", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")
-		sqlitetest.DeactivateUser(t, db, signe.ID)
 		fat := newTimelineFat(t, db, &clock{t: base}, group)
+		createPost(t, fat, signe, "One")
+		createPost(t, fat, signe, "Two")
+		timeline, err := fat.GetTimeline(t.Context(), signe.ID, "", 1)
+		is.NotError(t, err)
+		sqlitetest.DeactivateUser(t, db, signe.ID)
 
-		_, err := fat.GetTimeline(t.Context(), signe.ID, "", 0)
+		_, err = fat.GetTimeline(t.Context(), signe.ID, "", 0)
+		is.Error(t, model.ErrorUserInactive, err)
+
+		_, err = fat.GetTimeline(t.Context(), signe.ID, timeline.Next, 0)
 		is.Error(t, model.ErrorUserInactive, err)
 	})
 

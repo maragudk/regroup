@@ -19,12 +19,12 @@ type TimelinePost struct {
 	// Comments is how many comments the post has.
 	Comments int
 
-	// New is whether the post is new to the reader: it is by someone else and was posted since the
-	// reader's previous look at the timeline.
+	// New is whether the post is new to the reader: it is by someone else, and was posted after the reader
+	// joined and since the reader's previous look at the timeline.
 	New bool
 
-	// NewComments is how many of the comments are new to the reader: by someone else, and added since the
-	// reader last opened the post's comments.
+	// NewComments is how many of the comments are new to the reader: by someone else, and added after the
+	// reader joined and since the reader last opened the post's comments.
 	NewComments int `db:"new_comments"`
 }
 
@@ -36,7 +36,7 @@ type TimelineComment struct {
 	AuthorName string `db:"author_name"`
 
 	// New is whether the comment was new to the reader when the comments were opened: by someone else,
-	// and added since the reader last opened the post's comments.
+	// and added after the reader joined and since the reader last opened the post's comments.
 	New bool
 }
 
@@ -60,7 +60,7 @@ type TimelineDay struct {
 	// Yesterday is whether Date is the day before today in the group's time zone.
 	Yesterday bool
 
-	// Posts of the day, in the order of the page.
+	// Posts of the day, in the order of the page, with the times they were posted in the group's time zone.
 	Posts []TimelinePost
 }
 
@@ -99,17 +99,22 @@ func (d Date) String() string {
 
 var _ fmt.Stringer = Date{}
 
-// GroupByDay the given posts, by the date each was posted in the given location.
-// Days are newest first, and the posts of a day keep the order they were given in.
-// A day is labelled as today or yesterday from the given current time.
+// GroupByDay the given posts, by the date each was posted in the given location, which is UTC if nil.
+// Days are newest first, and the posts of a day keep the order they were given in, with the times they
+// were posted in the location. A day is labelled as today or yesterday from the given current time.
 func GroupByDay(posts []TimelinePost, loc *time.Location, now time.Time) []TimelineDay {
+	if loc == nil {
+		loc = time.UTC
+	}
+
 	today := DateOf(now.In(loc))
 	yesterday := today.AddDays(-1)
 
 	var days []TimelineDay
 	indexes := map[Date]int{}
 	for _, p := range posts {
-		date := DateOf(p.Created.T.In(loc))
+		p.Created.T = p.Created.T.In(loc)
+		date := DateOf(p.Created.T)
 		i, ok := indexes[date]
 		if !ok {
 			i = len(days)
@@ -132,20 +137,14 @@ func GroupByDay(posts []TimelinePost, loc *time.Location, now time.Time) []Timel
 	return days
 }
 
-// TimelineCursor is the position after the last post of a timeline page.
-// The timeline is ordered by time posted and then by the order posts were stored in, newest first,
-// so the cursor holds both.
+// TimelineCursor is the position after the last post of a timeline page: the time it was posted, and its
+// place in the order posts were stored in, which breaks ties between equal times.
 type TimelineCursor struct {
 	Created Time
 	Seq     int64
 }
 
 const timelineCursorVersion = 1
-
-var (
-	cursorMinTime = time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)
-	cursorMaxTime = time.Date(9999, time.December, 31, 23, 59, 59, 999_000_000, time.UTC)
-)
 
 // String satisfies [fmt.Stringer], encoding the cursor as an opaque, URL-safe string.
 func (c TimelineCursor) String() string {
@@ -172,7 +171,7 @@ func ParseTimelineCursor(s string) (TimelineCursor, error) {
 	}
 
 	created := time.UnixMilli(int64(binary.BigEndian.Uint64(b[1:9]))).UTC()
-	if created.Before(cursorMinTime) || created.After(cursorMaxTime) {
+	if y := created.Year(); y < 1 || y > 9999 {
 		return TimelineCursor{}, ErrorCursorInvalid
 	}
 

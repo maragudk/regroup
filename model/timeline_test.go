@@ -83,8 +83,54 @@ func TestGroupByDay(t *testing.T) {
 		is.Equal(t, model.Date{Year: 2026, Month: time.October, Day: 24}, days[1].Date)
 	})
 
+	t.Run("labels yesterday by the calendar, after a day of 23 hours", func(t *testing.T) {
+		// Clocks in Copenhagen went from 02:00 to 03:00 on 2026-03-29, so 24 hours before this is the 28th.
+		now := time.Date(2026, 3, 30, 0, 30, 0, 0, copenhagen)
+		posts := []model.TimelinePost{postAt("p1", time.Date(2026, 3, 29, 12, 0, 0, 0, copenhagen))}
+
+		days := model.GroupByDay(posts, copenhagen, now)
+
+		is.True(t, days[0].Yesterday)
+	})
+
+	t.Run("keeps days in order where clocks went back past midnight", func(t *testing.T) {
+		// In Goose Bay, 00:01 on 1990-10-28 became 23:01 on the 27th, so the later post has the earlier date.
+		gooseBay, err := time.LoadLocation("America/Goose_Bay")
+		is.NotError(t, err)
+		posts := []model.TimelinePost{
+			postAt("p2", time.Date(1990, 10, 28, 3, 30, 0, 0, time.UTC)),
+			postAt("p1", time.Date(1990, 10, 28, 3, 0, 30, 0, time.UTC)),
+		}
+
+		days := model.GroupByDay(posts, gooseBay, time.Date(1990, 10, 29, 12, 0, 0, 0, time.UTC))
+
+		is.Equal(t, 2, len(days))
+		is.Equal(t, model.Date{Year: 1990, Month: time.October, Day: 28}, days[0].Date)
+		is.EqualSlice(t, []model.PostID{"p1"}, postIDs(days[0].Posts))
+		is.Equal(t, model.Date{Year: 1990, Month: time.October, Day: 27}, days[1].Date)
+		is.EqualSlice(t, []model.PostID{"p2"}, postIDs(days[1].Posts))
+	})
+
+	t.Run("gives the posts' times in the given location", func(t *testing.T) {
+		at := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
+
+		days := model.GroupByDay([]model.TimelinePost{postAt("p1", at)}, copenhagen, at)
+
+		is.Equal(t, copenhagen, days[0].Posts[0].Created.T.Location())
+		is.True(t, days[0].Posts[0].Created.T.Equal(at))
+	})
+
+	t.Run("groups in UTC with no location", func(t *testing.T) {
+		at := time.Date(2026, 11, 25, 23, 30, 0, 0, time.UTC)
+
+		days := model.GroupByDay([]model.TimelinePost{postAt("p1", at)}, nil, at)
+
+		is.Equal(t, model.Date{Year: 2026, Month: time.November, Day: 25}, days[0].Date)
+		is.True(t, days[0].Today)
+	})
+
 	t.Run("gives no days for no posts", func(t *testing.T) {
-		is.Equal(t, 0, len(model.GroupByDay(nil, copenhagen, time.Now())))
+		is.Equal(t, 0, len(model.GroupByDay(nil, copenhagen, time.Date(2026, 11, 26, 9, 0, 0, 0, copenhagen))))
 	})
 
 	t.Run("puts every post in exactly one day, its local date, with days in order, in any time zone", func(t *testing.T) {
@@ -257,7 +303,8 @@ func postIDs(posts []model.TimelinePost) []model.PostID {
 	return ids
 }
 
-// localDate of the time in the location, worked out from the offset rather than with [time.Time.In].
+// localDate of the time in the location, by adding the location's offset at that instant to UTC, rather
+// than taking the date of the time in the location.
 func localDate(t time.Time, loc *time.Location) model.Date {
 	_, offset := t.In(loc).Zone()
 	return model.DateOf(t.UTC().Add(time.Duration(offset) * time.Second))

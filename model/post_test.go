@@ -29,6 +29,8 @@ func TestCleanPostBody(t *testing.T) {
 		{name: "accepts exactly the maximum length", input: strings.Repeat("æ", model.PostBodyMaxLength), expected: strings.Repeat("æ", model.PostBodyMaxLength)},
 		{name: "refuses an empty body", input: "", err: model.ErrorBodyEmpty},
 		{name: "refuses a body of only whitespace", input: " \r\n\t\u00a0 ", err: model.ErrorBodyEmpty},
+		{name: "refuses a body of only invisible formatting characters", input: "\u200b\ufeff\u2060\u00ad", err: model.ErrorBodyEmpty},
+		{name: "keeps invisible formatting characters next to visible ones", input: "👩\u200d💻 shipped", expected: "👩\u200d💻 shipped"},
 		{name: "refuses a body one character too long", input: strings.Repeat("æ", model.PostBodyMaxLength+1), err: model.ErrorBodyTooLong},
 		{name: "counts the length after trimming", input: " " + strings.Repeat("a", model.PostBodyMaxLength) + " ", expected: strings.Repeat("a", model.PostBodyMaxLength)},
 		{name: "refuses invalid UTF-8", input: "Cake \xff", err: model.ErrorBodyInvalid},
@@ -108,7 +110,7 @@ func TestCleanCommentBody(t *testing.T) {
 // holds control characters, carriage returns, or invalid UTF-8.
 func bodyText(maxLength int) hegel.Generator[string] {
 	return hegel.Composite(func(tc hegel.TestCase) string {
-		space := hegel.SampledFrom([]string{"", " ", "\n", "\r\n", "\r", "\t", "\u00a0", " \n \t"})
+		space := hegel.SampledFrom([]string{"", " ", "\n", "\r\n", "\r", "\t", "\u00a0", " \n \t", "\u200b", "\ufeff\u2060", "\u00ad"})
 		before := hegel.Draw(tc, space)
 		after := hegel.Draw(tc, space)
 
@@ -123,7 +125,7 @@ func bodyText(maxLength int) hegel.Generator[string] {
 		case 2:
 			middle = string(hegel.Draw(tc, hegel.Binary(0, 20)))
 		case 3:
-			middle = hegel.Draw(tc, hegel.Text().Alphabet("ab \n\r\t\x00\x7f").MaxSize(20))
+			middle = hegel.Draw(tc, hegel.Text().Alphabet("ab \n\r\t\x00\x7f\u200b\u200d\ufeff\u2028").MaxSize(20))
 		}
 
 		return before + middle + after
@@ -149,8 +151,8 @@ func checkCleanedBody(ht *hegel.T, input, body string, err error, maxLength int)
 				ht.Fatalf("refused %q as invalid, but it is valid UTF-8 with no control characters", input)
 			}
 		case model.ErrorBodyEmpty:
-			if normalised != "" {
-				ht.Fatalf("refused %q as empty", input)
+			if strings.ContainsFunc(normalised, func(r rune) bool { return !unicode.In(r, unicode.White_Space, unicode.Cf) }) {
+				ht.Fatalf("refused %q as empty, but it has something visible", input)
 			}
 		case model.ErrorBodyTooLong:
 			if utf8.RuneCountInString(normalised) <= maxLength {
@@ -168,8 +170,8 @@ func checkCleanedBody(ht *hegel.T, input, body string, err error, maxLength int)
 	if body != normalised {
 		ht.Fatalf("body %q is not the input %q with its line breaks normalised and its ends trimmed", body, input)
 	}
-	if body == "" {
-		ht.Fatalf("accepted %q as empty", input)
+	if !strings.ContainsFunc(body, func(r rune) bool { return !unicode.In(r, unicode.White_Space, unicode.Cf) }) {
+		ht.Fatalf("accepted %q, which has nothing visible", input)
 	}
 	if strings.Contains(body, "\r") {
 		ht.Fatalf("body %q holds a carriage return", body)

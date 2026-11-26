@@ -31,9 +31,8 @@ How we know regroup does what it should, given that Markus does not read the cod
 
 ## Not built yet
 
-- The preview instance and its made-up office group.
+- The preview instance. Its made-up office group and its one way to sign in as anyone are built behind the `preview` build tag (`make preview`).
 - The nightly workflow.
-- Hegel in `go.mod`, and `.hegel/` in `.gitignore`.
 - A pinned bombadil, its checks, and a CI job that starts the app and keeps the trace.
 - What bombadil needs from the app: a seeded database with one person per role, stable markers on posts, comments, and moderation notes, and a visible error when a Datastar request fails.
 

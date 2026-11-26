@@ -23,6 +23,8 @@ func TestRoutes(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
 		signe := sqlitetest.CreateUser(t, db, "Signe")
 		sqlitetest.CreateUser(t, db, "Thomas")
+		amira := sqlitetest.CreateUser(t, db, "Amira")
+		sqlitetest.DeactivateUser(t, db, amira.ID)
 
 		sm := scs.New()
 		r := gluehttp.NewRouter(gluehttp.NewRouterOpts{SM: sm})
@@ -43,6 +45,7 @@ func TestRoutes(t *testing.T) {
 		is.True(t, strings.Contains(body, ">Signe</button>"), body)
 		is.True(t, strings.Contains(body, ">Thomas</button>"), body)
 		is.True(t, strings.Contains(body, signe.ID.String()), body)
+		is.True(t, !strings.Contains(body, "Amira"), body)
 
 		client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		res, err = client.PostForm(server.URL+"/preview/sign-in", url.Values{"user": {signe.ID.String()}})

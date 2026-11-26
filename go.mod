@@ -15,6 +15,7 @@ require (
 	maragu.dev/gomponents-datastar v0.4.0
 	maragu.dev/httph v0.3.7
 	maragu.dev/is v0.3.1
+	maragu.dev/migrate v0.6.0
 )
 
 require (
@@ -90,7 +91,6 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	maragu.dev/goqite v0.4.0 // indirect
-	maragu.dev/migrate v0.6.0 // indirect
 	maragu.dev/redo v0.0.0-20260318124806-c50351b59a1b // indirect
 )
 

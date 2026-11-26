@@ -62,7 +62,7 @@ func NewFat(opts NewFatOptions) *Fat {
 // that no operation wires yet is a parameter all the same, so the first operation to need one finds it
 // already plumbed: bucket and sender are waiting like that.
 //
-// The clock is passed in, so that nothing reads the time directly and a test can replay a history.
+// The clock is passed in, so that no operation reads the time directly.
 func Setup(f *Fat, bucket *s3.Bucket, db *sqlite.Database, sender *postmark.Sender, now func() time.Time, group model.Group) {
 	CreateComment(f, db, now)
 	CreatePost(f, db, now)

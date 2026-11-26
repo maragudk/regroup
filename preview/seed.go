@@ -1,7 +1,5 @@
-// Package preview provides what only the preview build has: a made-up office group to fill an empty
-// database with, and a way to sign in as any of its people without an email.
-//
-// Nothing in this package is linked into the app unless it is built with the preview build tag.
+// Package preview provides a made-up office group to fill an empty database with, and a way to sign in
+// as any of its people without an email. Anyone who can reach the routes can sign in as anyone.
 package preview
 
 import (
@@ -15,9 +13,6 @@ import (
 	"app/model"
 	"app/sqlite"
 )
-
-// GroupName of the made-up group, used when the host's configuration names none.
-const GroupName = "The Loft"
 
 // People of the made-up group, in the order they joined.
 var people = []string{
@@ -35,7 +30,7 @@ type seedPost struct {
 	comments     []seedComment
 }
 
-// seedComment on a [seedPost], written the given minutes after the post.
+// seedComment on a [seedPost], written the given duration after the post.
 type seedComment struct {
 	after  time.Duration
 	author string
@@ -94,7 +89,7 @@ var posts = []seedPost{
 		}},
 }
 
-// Seed an empty database with the made-up office group "The Loft": its people, and a few days of posts
+// Seed an empty database with a made-up office group: its people, and a few days of posts
 // and comments, timed relative to now in the given time zone, so that the group always looks current.
 // Everyone last looked at the group the evening before, so what came after that is new to them.
 //

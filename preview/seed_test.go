@@ -16,7 +16,8 @@ import (
 func TestSeed(t *testing.T) {
 	copenhagen, err := time.LoadLocation("Europe/Copenhagen")
 	is.NotError(t, err)
-	now := time.Date(2026, 11, 26, 14, 0, 0, 0, copenhagen)
+	// Not today, so that the test can tell the time it gives from the real one.
+	now := time.Date(2031, 3, 14, 14, 0, 0, 0, copenhagen)
 
 	t.Run("fills an empty database with fourteen people, including the named ones", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
@@ -70,12 +71,13 @@ func TestSeed(t *testing.T) {
 				newComments += p.NewComments
 			}
 		}
-		is.True(t, newComments > 0, "expected a new comment on an older post")
+		// Only the comment on the coffee machine came after the evening before.
+		is.Equal(t, 1, newComments)
 	})
 
 	t.Run("puts nothing in the future when seeded just after midnight", func(t *testing.T) {
 		db := sqlitetest.NewDatabase(t)
-		early := time.Date(2026, 11, 26, 0, 10, 0, 0, copenhagen)
+		early := time.Date(2031, 3, 14, 0, 10, 0, 0, copenhagen)
 
 		_, err := preview.Seed(t.Context(), db, early, copenhagen)
 		is.NotError(t, err)
@@ -86,6 +88,25 @@ func TestSeed(t *testing.T) {
 		var latest model.Time
 		is.NotError(t, db.H.Get(t.Context(), &latest, `select max(created) from comments`))
 		is.True(t, !latest.T.After(early), "comment in the future")
+	})
+
+	t.Run("writes every post and comment so that cleaning would leave it as it is", func(t *testing.T) {
+		db := sqlitetest.NewDatabase(t)
+		_, err := preview.Seed(t.Context(), db, now, copenhagen)
+		is.NotError(t, err)
+
+		var bodies []string
+		is.NotError(t, db.H.Select(t.Context(), &bodies, `select body from comments`))
+		for _, body := range bodies {
+			cleaned, err := model.CleanCommentBody(body)
+			is.NotError(t, err)
+			is.Equal(t, body, cleaned)
+		}
+		for _, p := range timeline(t, db, "Markus") {
+			cleaned, err := model.CleanPostBody(p.Body)
+			is.NotError(t, err)
+			is.Equal(t, p.Body, cleaned)
+		}
 	})
 
 	t.Run("leaves a database with people in it alone", func(t *testing.T) {

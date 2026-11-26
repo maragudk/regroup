@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -9,14 +10,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"app/model"
-)
-
-const (
-	// timelineDefaultLimit of posts on a timeline page, when none is asked for.
-	timelineDefaultLimit = 20
-
-	// timelineMaxLimit of posts on a timeline page.
-	timelineMaxLimit = 100
 )
 
 // postCreator is the store a post is created in.
@@ -156,9 +149,9 @@ func GetTimeline(f *Fat, db timelineGetter, now func() time.Time, group model.Gr
 		}
 
 		if limit < 1 {
-			limit = timelineDefaultLimit
+			limit = 20
 		}
-		limit = min(limit, timelineMaxLimit)
+		limit = min(limit, 100)
 
 		posts, next, err := db.GetTimeline(ctx, actor, after, limit)
 		if err != nil {
@@ -217,8 +210,7 @@ func GetComments(f *Fat, db commentsGetter) {
 			return nil, err
 		}
 
-		trace.SpanFromContext(ctx).SetAttributes(attribute.String("post.id", postID.String()))
-
+		// The post is not recorded on the span, since who opened which comments is read state.
 		return db.GetComments(ctx, actor, postID)
 	}
 }
@@ -254,9 +246,11 @@ func checkActive(ctx context.Context, db userGetter, actor model.UserID) error {
 	return nil
 }
 
-// recordError on the span, if there is one.
+// recordError on the span, if there is one and it is not a refusal from the business domain, such as an
+// empty body or an inactive user.
 func recordError(span trace.Span, err error) {
-	if err == nil {
+	var domainErr model.Error
+	if err == nil || errors.As(err, &domainErr) {
 		return
 	}
 	span.RecordError(err)

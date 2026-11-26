@@ -10,22 +10,29 @@ import (
 	"app/model"
 )
 
-// CreatePost with the time posted, the author, and the body it is given, which are not checked here.
+// CreatePost with the time posted, the author, and the body as given.
 // The post is stored after every post before it, which breaks ties between equal times on the timeline.
 func (d *Database) CreatePost(ctx context.Context, p model.Post) (model.Post, error) {
-	query := `
-		insert into posts (seq, created, author_id, body)
-		values ((select coalesce(max(seq), 0) + 1 from posts), ?, ?, ?)
-		returning id, created, author_id, body`
-
 	var created model.Post
-	if err := d.H.Get(ctx, &created, query, p.Created, p.AuthorID, p.Body); err != nil {
+	err := d.H.InTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		seq, err := nextSeq(ctx, tx, "posts")
+		if err != nil {
+			return err
+		}
+
+		query := `
+			insert into posts (seq, created, author_id, body)
+			values (?, ?, ?, ?)
+			returning id, created, author_id, body`
+		return tx.Get(ctx, &created, query, seq, p.Created, p.AuthorID, p.Body)
+	})
+	if err != nil {
 		return model.Post{}, err
 	}
 	return created, nil
 }
 
-// CreateComment with the time, the post, the author, and the body it is given, which are not checked here.
+// CreateComment with the time, the post, the author, and the body as given.
 // Returns [model.ErrorPostNotFound] if there is no such post.
 func (d *Database) CreateComment(ctx context.Context, c model.Comment) (model.Comment, error) {
 	var created model.Comment
@@ -34,11 +41,16 @@ func (d *Database) CreateComment(ctx context.Context, c model.Comment) (model.Co
 			return err
 		}
 
+		seq, err := nextSeq(ctx, tx, "comments")
+		if err != nil {
+			return err
+		}
+
 		query := `
 			insert into comments (seq, created, post_id, author_id, body)
-			values ((select coalesce(max(seq), 0) + 1 from comments), ?, ?, ?, ?)
+			values (?, ?, ?, ?, ?)
 			returning id, created, post_id, author_id, body`
-		return tx.Get(ctx, &created, query, c.Created, c.PostID, c.AuthorID, c.Body)
+		return tx.Get(ctx, &created, query, seq, c.Created, c.PostID, c.AuthorID, c.Body)
 	})
 	if err != nil {
 		return model.Comment{}, err
@@ -53,38 +65,50 @@ type timelinePostRow struct {
 }
 
 // GetTimeline page for the given reader: at most limit posts after the given cursor, newest first,
-// and the cursor for the next page, which is nil if there is none.
+// and the cursor for the next page, which is nil if there is none. The limit must be at least 1.
 //
 // Each post is marked with what is new to this reader and nobody else. A post is new if someone else
-// posted it since the reader's previous look at the timeline. A nil cursor is the first page, which is a
-// look: its marks are computed against the look before it, and it then becomes the reader's latest look.
-// The pages after it keep the marks of that first page.
+// posted it since the reader's previous look at the timeline, and after the reader joined.
+//
+// A nil cursor is the first page, which is a look at the whole timeline: its marks are computed against
+// the reader's previous look, and it then becomes the reader's latest look. A page after the first is
+// marked against the look before the reader's latest look, so it keeps the marks of its first page as
+// long as the reader has not looked again since.
 //
 // Returns [model.ErrorUserNotFound] if there is no such reader.
 func (d *Database) GetTimeline(ctx context.Context, reader model.UserID, after *model.TimelineCursor, limit int) ([]model.TimelinePost, *model.TimelineCursor, error) {
+	if limit < 1 {
+		return nil, nil, errors.New("limit must be at least 1")
+	}
+
 	var rows []timelinePostRow
-	err := d.H.InTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+	get := func(ctx context.Context, q querier) error {
 		query := `select basis_post_seq from timeline_reads where user_id = ?`
 		if after == nil {
 			query = `
 				update timeline_reads
-				set basis_post_seq = looked_post_seq, looked_post_seq = (select coalesce(max(seq), 0) from posts)
+				set basis_post_seq = looked_post_seq, looked_post_seq = (select value from sequences where name = 'posts')
 				where user_id = ?
 				returning basis_post_seq`
 		}
 
 		var basis int64
-		if err := tx.Get(ctx, &basis, query, reader); err != nil {
+		if err := q.Get(ctx, &basis, query, reader); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return model.ErrorUserNotFound
 			}
 			return err
 		}
 
-		var afterCreated model.Time
-		var afterSeq int64
+		args := []any{
+			stdsql.Named("reader", reader),
+			stdsql.Named("basis", basis),
+			stdsql.Named("limit", limit+1),
+		}
+		var where string
 		if after != nil {
-			afterCreated, afterSeq = after.Created, after.Seq
+			where = `where (p.created, p.seq) < (:after_created, :after_seq)`
+			args = append(args, stdsql.Named("after_created", after.Created), stdsql.Named("after_seq", after.Seq))
 		}
 
 		query = `
@@ -110,18 +134,22 @@ func (d *Database) GetTimeline(ctx context.Context, reader model.UserID, after *
 				) as new_comments
 			from posts p
 				join users u on u.id = p.author_id
-			where :after_seq = 0 or (p.created, p.seq) < (:after_created, :after_seq)
+			` + where + `
 			order by p.created desc, p.seq desc
 			limit :limit`
 
-		return tx.Select(ctx, &rows, query,
-			stdsql.Named("reader", reader),
-			stdsql.Named("basis", basis),
-			stdsql.Named("after_created", afterCreated),
-			stdsql.Named("after_seq", afterSeq),
-			stdsql.Named("limit", limit+1),
-		)
-	})
+		return q.Select(ctx, &rows, query, args...)
+	}
+
+	// Only a look writes, so the pages after the first read without taking the write lock.
+	var err error
+	if after == nil {
+		err = d.H.InTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+			return get(ctx, tx)
+		})
+	} else {
+		err = get(ctx, d.H)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -184,7 +212,7 @@ func (d *Database) GetComments(ctx context.Context, reader model.UserID, postID 
 
 		query = `
 			insert into comment_reads (user_id, post_id, seen_comment_seq)
-			values (:reader, :post, (select coalesce(max(seq), 0) from comments where post_id = :post))
+			values (:reader, :post, (select value from sequences where name = 'comments'))
 			on conflict (user_id, post_id) do update set seen_comment_seq = excluded.seen_comment_seq`
 		return tx.Exec(ctx, query, stdsql.Named("reader", reader), stdsql.Named("post", postID))
 	})
@@ -192,6 +220,21 @@ func (d *Database) GetComments(ctx context.Context, reader model.UserID, postID 
 		return nil, err
 	}
 	return comments, nil
+}
+
+// querier is what both [sql.Helper] and [sql.Tx] query with.
+type querier interface {
+	Get(ctx context.Context, dest any, query string, args ...any) error
+	Select(ctx context.Context, dest any, query string, args ...any) error
+}
+
+// nextSeq of the named sequence, counting it up by one.
+func nextSeq(ctx context.Context, tx *sql.Tx, name string) (int64, error) {
+	var seq int64
+	if err := tx.Get(ctx, &seq, `update sequences set value = value + 1 where name = ? returning value`, name); err != nil {
+		return 0, err
+	}
+	return seq, nil
 }
 
 // postExists or return [model.ErrorPostNotFound].

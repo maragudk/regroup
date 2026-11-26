@@ -1,5 +1,8 @@
 //go:build preview
 
+// The preview build: it seeds an empty database with a made-up office group, and lets anyone sign in as
+// anyone at /preview. Only the preview build tag links the preview package into the app.
+
 package main
 
 import (
@@ -15,7 +18,7 @@ import (
 )
 
 func init() {
-	defaultGroupName = preview.GroupName
+	defaultGroupName = "The Loft"
 
 	setupPreview = func(ctx context.Context, log *slog.Logger, db *sqlite.Database, now func() time.Time, group model.Group) (func(*gluehttp.Router), error) {
 		log.WarnContext(ctx, "This is the preview build: anyone can sign in as anyone at /preview")

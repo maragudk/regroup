@@ -9,7 +9,7 @@ import (
 
 // Group that this instance holds. One instance holds one group.
 type Group struct {
-	// Name of the group, as the host configured it.
+	// Name of the group.
 	Name string
 
 	// TimeZone the group's timeline is grouped into days in.
@@ -24,6 +24,7 @@ func NewGroup(name, timeZone string) (Group, error) {
 		return Group{}, errors.New("group name is empty")
 	}
 
+	timeZone = strings.TrimSpace(timeZone)
 	if timeZone == "Local" {
 		return Group{}, errors.New(`group time zone "Local" depends on the machine; use an IANA name such as "Europe/Copenhagen"`)
 	}

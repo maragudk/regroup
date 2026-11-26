@@ -1,6 +1,7 @@
 package preview
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -13,12 +14,12 @@ import (
 	"app/sqlite"
 )
 
-// Routes of the preview: a list of everyone in the group at /preview, and signing in as any of them
-// through the session, which is where the app's authentication learns who is signed in.
+// Routes of the preview: a list of everyone active in the group at /preview, and signing in as any of
+// them by putting their ID in the session under [gluehttp.SessionUserIDKey].
 func Routes(r *gluehttp.Router, log *slog.Logger, db *sqlite.Database) {
 	r.Get("/preview", func(props html.PageProps) (Node, error) {
 		var users []model.User
-		if err := db.H.Select(props.Ctx, &users, `select * from users order by name`); err != nil {
+		if err := db.H.Select(props.Ctx, &users, `select * from users where active = 1 order by name`); err != nil {
 			return html.ErrorPage(), err
 		}
 
@@ -40,8 +41,11 @@ func Routes(r *gluehttp.Router, log *slog.Logger, db *sqlite.Database) {
 	r.Post("/preview/sign-in", func(props html.PageProps) (Node, error) {
 		id := model.UserID(props.R.FormValue("user"))
 		if _, err := db.GetUser(props.Ctx, id); err != nil {
-			http.Error(props.W, "no such user", http.StatusBadRequest)
-			return nil, nil
+			if errors.Is(err, model.ErrorUserNotFound) {
+				http.Error(props.W, "no such user", http.StatusBadRequest)
+				return nil, nil
+			}
+			return html.ErrorPage(), err
 		}
 
 		if err := r.SM.RenewToken(props.Ctx); err != nil {
